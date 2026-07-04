@@ -6,6 +6,7 @@
   "dependencies": {
     "@agent-identity/shared": "workspace:*",
     "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-s3": "^3.600.0",
     "@aws-sdk/lib-dynamodb": "^3.600.0",
     "hono": "^4.5.0"
   },
