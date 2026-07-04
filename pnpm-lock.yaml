@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@agent-identity/client':
+        specifier: workspace:*
+        version: link:packages/client
     devDependencies:
       '@types/node':
         specifier: ^20.14.0
