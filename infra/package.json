@@ -1,0 +1,10 @@
+{
+  "name": "@agent-identity/infra",
+  "version": "0.1.0",
+  "type": "module",
+  "dependencies": {
+    "aws-cdk-lib": "^2.150.0",
+    "constructs": "^10.3.0"
+  },
+  "devDependencies": { "aws-cdk": "^2.150.0", "esbuild": "^0.23.0" }
+}
