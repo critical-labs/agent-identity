@@ -1,0 +1,62 @@
+#!/usr/bin/env -S npx tsx
+import { AgentIdentityClient, loadOrCreateProfile, saveProfile } from "@agent-identity/client";
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { z } from "zod";
+import { makeTools } from "./tools.js";
+
+const profileName = process.env.AGENT_IDENTITY_PROFILE ?? "default";
+const profile = loadOrCreateProfile(profileName);
+const client = new AgentIdentityClient({
+  apiUrl: process.env.AGENT_IDENTITY_API_URL!,
+  keypair: profile,
+  fleetKey: process.env.AGENT_IDENTITY_FLEET_KEY,
+});
+const tools = makeTools(client, (id) =>
+  saveProfile({ ...profile, ...id }, profileName));
+
+const server = new McpServer({ name: "agent-identity", version: "0.1.0" });
+const json = (v: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(v, null, 2) }] });
+
+server.registerTool(
+  "ensure_identity",
+  {
+    description: "Load or create this agent's identity and mailbox address. Idempotent; call at session start.",
+    inputSchema: {},
+  },
+  async () => json(await tools.ensureIdentity()),
+);
+
+server.registerTool(
+  "list_emails",
+  {
+    description: "List received emails, newest first.",
+    inputSchema: { since: z.string().optional(), limit: z.number().int().max(50).optional() },
+  },
+  async (args) => json(await tools.listEmails(args)),
+);
+
+server.registerTool(
+  "get_email",
+  {
+    description: "Get a full email by id, including body text and extracted links.",
+    inputSchema: { id: z.string() },
+  },
+  async ({ id }) => json(await tools.getEmail(id)),
+);
+
+server.registerTool(
+  "wait_for_email",
+  {
+    description: "Poll until an email matching the filters arrives, or timeout (returns {timedOut:true}).",
+    inputSchema: {
+      fromContains: z.string().optional(),
+      subjectContains: z.string().optional(),
+      timeoutSeconds: z.number().max(300).default(120),
+    },
+  },
+  async (args) => json(await tools.waitForEmail(args)),
+);
+
+const transport = new StdioServerTransport();
+await server.connect(transport);
