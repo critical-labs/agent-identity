@@ -20,7 +20,7 @@ function signed(method: string, path: string, body = "") {
 
 const agent = { agentId: "482913", address: "482913@d", status: "active" as const, publicKey: kp.publicKeySpkiBase64, createdAt: "t" };
 
-function makeDeps(overrides: Partial<Deps["agents"] & Deps["emails"]> = {}): Deps {
+function makeDeps(overrides: Record<string, unknown> = {}): Deps {
   return {
     agents: {
       getByFingerprint: vi.fn(async () => agent),
