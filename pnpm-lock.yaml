@@ -25,7 +25,11 @@ importers:
 
   packages/api: {}
 
-  packages/client: {}
+  packages/client:
+    dependencies:
+      '@agent-identity/shared':
+        specifier: workspace:*
+        version: link:../shared
 
   packages/ingest: {}
 
