@@ -1,7 +1,7 @@
 import { DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it } from "vitest";
-import { EmailsRepo } from "./emails.js";
+import { EmailsRepo, InvalidCursorError } from "./emails.js";
 
 const ddb = mockClient(DynamoDBDocumentClient);
 const repo = new EmailsRepo(ddb as never, "tbl", 90);
@@ -38,6 +38,12 @@ describe("EmailsRepo", () => {
     await repo.listEmails("482913", { since: "2026-07-04T00:00:00Z" });
     const q = ddb.commandCalls(QueryCommand)[0].args[0].input;
     expect(q.KeyConditionExpression).toContain(":sk");
+  });
+
+  it("listEmails rejects a malformed cursor with InvalidCursorError", async () => {
+    ddb.on(QueryCommand).resolves({ Items: [] });
+    await expect(repo.listEmails("482913", { cursor: "notacursor" }))
+      .rejects.toBeInstanceOf(InvalidCursorError);
   });
 
   it("getEmail returns undefined for another agent's email", async () => {

@@ -14,6 +14,16 @@ export interface NewEmail {
   bodyS3Key?: string;
 }
 
+export class InvalidCursorError extends Error {}
+
+function decodeCursor(cursor: string): Record<string, unknown> {
+  try {
+    return JSON.parse(Buffer.from(cursor, "base64url").toString());
+  } catch {
+    throw new InvalidCursorError("malformed cursor");
+  }
+}
+
 export class EmailsRepo {
   constructor(
     private readonly ddb: DynamoDBDocumentClient,
@@ -46,9 +56,7 @@ export class EmailsRepo {
       ExpressionAttributeValues: values,
       ScanIndexForward: false,
       Limit: opts.limit ?? 25,
-      ExclusiveStartKey: opts.cursor
-        ? JSON.parse(Buffer.from(opts.cursor, "base64url").toString())
-        : undefined,
+      ExclusiveStartKey: opts.cursor ? decodeCursor(opts.cursor) : undefined,
     }));
     return {
       emails: (res.Items ?? []).map((i) => ({

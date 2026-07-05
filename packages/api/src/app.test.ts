@@ -1,6 +1,7 @@
 import { canonicalString, generateKeypair, sign } from "@agent-identity/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type Deps } from "./app.js";
+import { InvalidCursorError } from "./db/emails.js";
 
 const kp = generateKeypair();
 
@@ -72,6 +73,16 @@ describe("app", () => {
     expect(deps.emails.listEmails).toHaveBeenCalledWith("482913", {
       since: "2026-07-01T00:00:00Z", limit: 5, cursor: undefined,
     });
+  });
+
+  it("GET /emails returns 400 for a malformed cursor", async () => {
+    const deps = makeDeps({
+      listEmails: vi.fn(async () => { throw new InvalidCursorError("malformed cursor"); }) as never,
+    });
+    const app = createApp(deps);
+    const path = "/emails?cursor=notacursor";
+    const res = await app.request(path, signed("GET", path));
+    expect(res.status).toBe(400);
   });
 
   it("GET /emails/:id 404s on missing/foreign email", async () => {

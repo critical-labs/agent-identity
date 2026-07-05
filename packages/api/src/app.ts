@@ -2,7 +2,7 @@ import { fingerprint } from "@agent-identity/shared";
 import { Hono } from "hono";
 import { signatureAuth } from "./auth.js";
 import type { AgentsRepo } from "./db/agents.js";
-import type { EmailsRepo } from "./db/emails.js";
+import { InvalidCursorError, type EmailsRepo } from "./db/emails.js";
 
 export interface Deps {
   agents: AgentsRepo;
@@ -33,12 +33,17 @@ export function createApp(deps: Deps): Hono {
 
   app.get("/emails", async (c) => {
     const limitRaw = c.req.query("limit");
-    const result = await deps.emails.listEmails(c.get("agent").agentId, {
-      since: c.req.query("since"),
-      limit: limitRaw ? Number(limitRaw) : undefined,
-      cursor: c.req.query("cursor"),
-    });
-    return c.json(result);
+    try {
+      const result = await deps.emails.listEmails(c.get("agent").agentId, {
+        since: c.req.query("since"),
+        limit: limitRaw ? Number(limitRaw) : undefined,
+        cursor: c.req.query("cursor"),
+      });
+      return c.json(result);
+    } catch (err) {
+      if (err instanceof InvalidCursorError) return c.json({ error: "invalid cursor" }, 400);
+      throw err;
+    }
   });
 
   app.get("/emails/:id", async (c) => {
