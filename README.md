@@ -49,7 +49,7 @@ SES inbound email is only available in **us-east-1**, **us-west-2**, and **eu-we
 
 4. Activate the SES receipt rule set. CDK creates the rule set but does not activate it — you must do this manually:
    ```bash
-   aws ses set-active-receipt-rule-set --rule-set-name <RuleSetName from stack output>
+   aws ses set-active-receipt-rule-set --rule-set-name <ReceiptRuleSetName from stack output>
    ```
 
 5. Mint a fleet key so agents can register:

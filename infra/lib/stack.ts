@@ -72,7 +72,7 @@ export class AgentIdentityStack extends Stack {
       defaultIntegration: new HttpLambdaIntegration("ApiInt", apiFn),
     });
 
-    new ReceiptRuleSet(this, "Rules", {
+    const rules = new ReceiptRuleSet(this, "Rules", {
       rules: [{
         recipients: [props.domain],
         scanEnabled: true,
@@ -84,6 +84,7 @@ export class AgentIdentityStack extends Stack {
     });
 
     new CfnOutput(this, "ApiUrl", { value: httpApi.apiEndpoint });
+    new CfnOutput(this, "ReceiptRuleSetName", { value: rules.receiptRuleSetName });
     new CfnOutput(this, "TableName", { value: table.tableName });
     new CfnOutput(this, "MxRecord", {
       value: `${props.domain} MX 10 inbound-smtp.${this.region}.amazonaws.com`,
