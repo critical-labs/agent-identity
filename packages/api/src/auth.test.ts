@@ -46,6 +46,12 @@ describe("signatureAuth", () => {
     expect(res.status).toBe(401);
   });
 
+  it("rejects malformed timestamp with 401 even when the signature over it is valid", async () => {
+    const app = makeApp({ getByFingerprint: vi.fn(async () => agent) as never });
+    const res = await app.request("/me", { headers: signedHeaders(kp, "/me", "garbage") });
+    expect(res.status).toBe(401);
+  });
+
   it("rejects revoked agent with 403", async () => {
     const app = makeApp({
       getByFingerprint: vi.fn(async () => ({ ...agent, status: "revoked" })) as never,

@@ -18,7 +18,10 @@ export function signatureAuth(agents: AgentsRepo): MiddlewareHandler {
     const sig = c.req.header("x-agent-signature");
     if (!key || !ts || !sig) return c.json({ error: "missing auth headers" }, 401);
 
-    if (Math.abs(Date.now() - Date.parse(ts)) > SKEW_MS)
+    // NaN comparisons are false, so an unparseable timestamp must be
+    // rejected explicitly or it would bypass the replay window entirely.
+    const tsMs = Date.parse(ts);
+    if (!Number.isFinite(tsMs) || Math.abs(Date.now() - tsMs) > SKEW_MS)
       return c.json({ error: "timestamp out of range" }, 401);
 
     const url = new URL(c.req.url);
