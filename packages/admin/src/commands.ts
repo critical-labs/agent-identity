@@ -1,5 +1,5 @@
 import {
-  DynamoDBDocumentClient, PutCommand, ScanCommand, UpdateCommand,
+  DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand, UpdateCommand,
 } from "@aws-sdk/lib-dynamodb";
 import { createHash, randomBytes } from "node:crypto";
 
@@ -41,11 +41,13 @@ export async function listAgents(
 export async function revokeAgent(
   ddb: DynamoDBDocumentClient, table: string, agentId: string,
 ): Promise<void> {
-  const agent = (await listAgents(ddb, table)).find((a) => a.agentId === agentId);
-  if (!agent) throw new Error(`no agent with id ${agentId}`);
+  const { Item } = await ddb.send(new GetCommand({
+    TableName: table, Key: { PK: `ADDR#${agentId}`, SK: "ADDR" },
+  }));
+  if (!Item) throw new Error(`no agent with id ${agentId}`);
   await ddb.send(new UpdateCommand({
     TableName: table,
-    Key: { PK: `AGENT#${agent.fingerprint}`, SK: "AGENT" },
+    Key: { PK: `AGENT#${Item.fingerprint}`, SK: "AGENT" },
     UpdateExpression: "SET #s = :r",
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: { ":r": "revoked" },

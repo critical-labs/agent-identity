@@ -2,7 +2,7 @@
   "name": "@agent-identity/admin",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/commands.ts" },
   "bin": { "mailctl": "./src/mailctl.ts" },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.600.0",

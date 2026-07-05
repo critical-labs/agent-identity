@@ -1,4 +1,4 @@
-import { DynamoDBDocumentClient, PutCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, GetCommand, PutCommand, ScanCommand, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it } from "vitest";
@@ -28,13 +28,18 @@ describe("mailctl commands", () => {
     ]);
   });
 
-  it("revokeAgent resolves agentId to fingerprint and sets revoked", async () => {
-    ddb.on(ScanCommand).resolves({
-      Items: [{ PK: "AGENT#fp1", agentId: "482913", address: "a", status: "active" }],
-    });
+  it("revokeAgent resolves agentId via ADDR mirror and sets revoked", async () => {
+    ddb.on(GetCommand).resolves({ Item: { PK: "ADDR#482913", SK: "ADDR", fingerprint: "fp1" } });
     ddb.on(UpdateCommand).resolves({});
     await revokeAgent(ddb as never, "tbl", "482913");
+    const get = ddb.commandCalls(GetCommand)[0].args[0].input;
+    expect(get.Key).toEqual({ PK: "ADDR#482913", SK: "ADDR" });
     const upd = ddb.commandCalls(UpdateCommand)[0].args[0].input;
     expect(upd.Key).toEqual({ PK: "AGENT#fp1", SK: "AGENT" });
+  });
+
+  it("revokeAgent throws on unknown agentId", async () => {
+    ddb.on(GetCommand).resolves({});
+    await expect(revokeAgent(ddb as never, "tbl", "000000")).rejects.toThrow(/no agent/);
   });
 });
