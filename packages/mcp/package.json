@@ -2,7 +2,7 @@
   "name": "@agent-identity/mcp",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/tools.ts" },
   "bin": { "agent-identity-mcp": "./src/server.ts" },
   "dependencies": {
     "@agent-identity/client": "workspace:*",
