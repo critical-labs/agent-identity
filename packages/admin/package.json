@@ -1,0 +1,15 @@
+{
+  "name": "@agent-identity/admin",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/commands.ts" },
+  "bin": { "mailctl": "./src/mailctl.ts" },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "commander": "^12.1.0"
+  },
+  "devDependencies": {
+    "aws-sdk-client-mock": "^4.0.0"
+  }
+}

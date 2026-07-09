@@ -1,0 +1,103 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm vitest run
+      - run: npx tsc --noEmit -p tsconfig.base.json
+      - name: CDK synth (no credentials)
+        working-directory: infra
+        run: pnpm exec cdk synth -c domain=ci.invalid > /dev/null
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Check required repository variables
+        env:
+          MAIL_DOMAIN: ${{ vars.MAIL_DOMAIN }}
+          AWS_REGION: ${{ vars.AWS_REGION }}
+          AWS_DEPLOY_ROLE_ARN: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+        run: |
+          missing=0
+          for v in MAIL_DOMAIN AWS_REGION AWS_DEPLOY_ROLE_ARN; do
+            if [ -z "$(eval echo "\$$v")" ]; then
+              echo "::error::Repository variable $v is not set. Add it under Settings > Secrets and variables > Actions > Variables."
+              missing=1
+            fi
+          done
+          exit $missing
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - name: CDK deploy
+        working-directory: infra
+        run: >
+          pnpm exec cdk deploy --require-approval never
+          -c domain=${{ vars.MAIL_DOMAIN }}
+          --outputs-file outputs.json
+      - name: Activate SES receipt rule set
+        working-directory: infra
+        run: |
+          RULE_SET=$(jq -r 'to_entries[0].value.ReceiptRuleSetName' outputs.json)
+          aws ses set-active-receipt-rule-set --rule-set-name "$RULE_SET"
+          echo "Activated receipt rule set: $RULE_SET"
+      - name: Write job summary
+        working-directory: infra
+        env:
+          MAIL_DOMAIN: ${{ vars.MAIL_DOMAIN }}
+        run: |
+          API_URL=$(jq -r 'to_entries[0].value.ApiUrl' outputs.json)
+          MX_RECORD=$(jq -r 'to_entries[0].value.MxRecord' outputs.json)
+          TABLE_NAME=$(jq -r 'to_entries[0].value.TableName' outputs.json)
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Deployed
+
+          | Output | Value |
+          |---|---|
+          | ApiUrl | $API_URL |
+          | MxRecord | \`$MX_RECORD\` |
+          | TableName | $TABLE_NAME |
+
+          ### Remaining manual steps
+
+          1. Publish the MX record above in your DNS provider.
+          2. If not already done, verify the SES domain identity and add its DKIM records: \`aws sesv2 create-email-identity --email-identity $MAIL_DOMAIN\`
+          3. Mint a fleet key: \`AGENT_IDENTITY_TABLE=$TABLE_NAME npx tsx packages/admin/src/mailctl.ts fleet-key create --label <label>\`
+          EOF
