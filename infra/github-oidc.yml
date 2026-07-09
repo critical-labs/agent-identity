@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  One-time bootstrap for GitHub Actions deploys of agent-identity:
+  GitHub OIDC identity provider + IAM role assumable only by the
+  production environment of the configured repository.
+
+Parameters:
+  GitHubOrg:
+    Type: String
+    Default: critical-labs
+  GitHubRepo:
+    Type: String
+    Default: agent-identity
+  EnvironmentName:
+    Type: String
+    Default: production
+  CreateOidcProvider:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      An AWS account can hold only one OIDC provider per URL. Set to
+      false if token.actions.githubusercontent.com already exists here.
+
+Conditions:
+  ShouldCreateProvider:
+    Fn::Equals:
+      - Ref: CreateOidcProvider
+      - "true"
+
+Resources:
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: ShouldCreateProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: agent-identity-github-deploy
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: sts:AssumeRoleWithWebIdentity
+            Principal:
+              Federated:
+                Fn::If:
+                  - ShouldCreateProvider
+                  - Ref: GitHubOidcProvider
+                  - Fn::Sub: arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:sub:
+                  Fn::Sub: repo:${GitHubOrg}/${GitHubRepo}:environment:${EnvironmentName}
+      Policies:
+        - PolicyName: cdk-deploy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # CDK v2 deploys through its bootstrap roles (cdk-*), so we
+              # delegate instead of enumerating service permissions.
+              - Effect: Allow
+                Action: sts:AssumeRole
+                Resource:
+                  Fn::Sub: arn:aws:iam::${AWS::AccountId}:role/cdk-*
+              # SES rule-set activation APIs do not support resource scoping.
+              - Effect: Allow
+                Action:
+                  - ses:SetActiveReceiptRuleSet
+                  - ses:DescribeReceiptRuleSet
+                Resource: "*"
+
+Outputs:
+  DeployRoleArn:
+    Description: Paste into the AWS_DEPLOY_ROLE_ARN repository variable.
+    Value:
+      Fn::GetAtt:
+        - DeployRole
+        - Arn
