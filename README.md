@@ -60,6 +60,37 @@ SES inbound email is only available in **us-east-1**, **us-west-2**, and **eu-we
 
 Other admin operations (listing agents, revoking an identity) use the same `mailctl` CLI with operator AWS credentials directly against DynamoDB. There is no admin HTTP API.
 
+## CI/CD (GitHub Actions)
+
+`.github/workflows/deploy.yml` tests and deploys the stack on every push to `main`, or on demand from the Actions tab (`workflow_dispatch`). Deploys authenticate to AWS via GitHub OIDC — no long-lived AWS keys are stored in GitHub.
+
+One-time setup (run in CloudShell, or any shell with admin credentials, in your target region — SES inbound requires us-east-1, us-west-2, or eu-west-1):
+
+1. Bootstrap the CDK toolkit:
+   ```bash
+   npx aws-cdk@2 bootstrap aws://$(aws sts get-caller-identity --query Account --output text)/$AWS_REGION
+   ```
+
+2. Create the OIDC provider and deploy role (add `CreateOidcProvider=false` to the parameter overrides if the account already has a GitHub OIDC provider):
+   ```bash
+   curl -sO https://raw.githubusercontent.com/critical-labs/agent-identity/main/infra/github-oidc.yml
+   aws cloudformation deploy --template-file github-oidc.yml \
+     --stack-name agent-identity-github-oidc --capabilities CAPABILITY_NAMED_IAM
+   aws cloudformation describe-stacks --stack-name agent-identity-github-oidc \
+     --query "Stacks[0].Outputs[?OutputKey=='DeployRoleArn'].OutputValue" --output text
+   ```
+
+3. In repo **Settings → Environments**, create an environment named `production` (optionally require reviewers to gate deploys).
+
+4. In repo **Settings → Secrets and variables → Actions → Variables**, set:
+   - `MAIL_DOMAIN` — the mail domain, e.g. `mail.example.com`
+   - `AWS_REGION` — e.g. `us-east-1`
+   - `AWS_DEPLOY_ROLE_ARN` — the `DeployRoleArn` output from step 2
+
+5. Run the **deploy** workflow from the Actions tab. The job summary lists the stack outputs and the remaining manual steps (DNS MX record, SES domain verification, fleet key). The workflow activates the SES receipt rule set automatically.
+
+If the deploy job fails at `configure-aws-credentials`, the usual cause is a trust-policy mismatch: the role only trusts `repo:critical-labs/agent-identity:environment:production`, so the environment name and repository must match exactly.
+
 ## GitHub onboarding flow
 
 GitHub blocks automated signups — their Terms of Service require human account creation and a CAPTCHA enforces it. The flow is therefore human-assisted at exactly one step:
