@@ -25,6 +25,7 @@ export async function processRecord(record: SESEventRecord, deps: IngestDeps): P
     parsed ??= await parseEmail(await deps.getRaw(rawS3Key));
     const bodySize = Buffer.byteLength(parsed.text) + Buffer.byteLength(parsed.html ?? "");
     const base = {
+      messageId: mail.messageId,
       from: parsed.from, subject: parsed.subject,
       receivedAt: mail.timestamp, links: parsed.links, rawS3Key,
     };
