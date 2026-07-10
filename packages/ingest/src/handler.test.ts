@@ -105,6 +105,21 @@ describe("processRecord", () => {
     expect(deps.emails.putEmail).not.toHaveBeenCalled();
   });
 
+  it("lets mail through when verdict objects are absent (scanning disabled)", async () => {
+    const deps = makeDeps();
+    const record = {
+      ses: {
+        mail: { messageId: "m1", timestamp: "2026-07-04T10:00:00.000Z" },
+        receipt: {
+          recipients: ["482913@mail.example.com"],
+          // no spamVerdict / virusVerdict keys at all
+        },
+      },
+    };
+    await expect(processRecord(record as never, deps)).resolves.toBeUndefined();
+    expect(deps.emails.putEmail).toHaveBeenCalled();
+  });
+
   it("offloads oversized bodies to S3", async () => {
     const deps = { ...makeDeps(), maxInlineBodyBytes: 4 };
     await processRecord(sesRecord() as never, deps);

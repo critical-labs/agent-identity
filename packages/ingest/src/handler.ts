@@ -12,7 +12,9 @@ export interface IngestDeps {
 
 export async function processRecord(record: SESEventRecord, deps: IngestDeps): Promise<void> {
   const { mail, receipt } = record.ses;
-  if (receipt.spamVerdict.status === "FAIL" || receipt.virusVerdict.status === "FAIL") return;
+  // Fail-open by design: only a positive FAIL verdict drops mail. Missing verdicts
+  // (scanning disabled by a self-hoster) and GRAY/PROCESSING_FAILED are let through.
+  if (receipt.spamVerdict?.status === "FAIL" || receipt.virusVerdict?.status === "FAIL") return;
 
   const rawS3Key = `raw/${mail.messageId}`;
   let parsed: Awaited<ReturnType<typeof parseEmail>> | undefined;
