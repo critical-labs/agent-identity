@@ -73,7 +73,20 @@ export function makeLambdaDeps(): IngestDeps {
   };
 }
 
+export async function processEvent(event: SESEvent, deps: IngestDeps): Promise<void> {
+  for (const record of event.Records) {
+    const messageId = record.ses.mail.messageId;
+    try {
+      await processRecord(record, deps);
+    } catch (error) {
+      // Do not rethrow: rethrowing triggers an SES whole-event retry that would
+      // duplicate already-stored mail. The raw message remains at raw/<messageId>
+      // in S3 for manual recovery, so we prefer continuing over retry.
+      console.error("ingest: failed to process record", { messageId, error });
+    }
+  }
+}
+
 export async function handler(event: SESEvent): Promise<void> {
-  const deps = makeLambdaDeps();
-  for (const record of event.Records) await processRecord(record, deps);
+  await processEvent(event, makeLambdaDeps());
 }
