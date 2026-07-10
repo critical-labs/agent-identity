@@ -2,6 +2,7 @@ import { canonicalString, generateKeypair, sign } from "@agent-identity/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createApp, type Deps } from "./app.js";
 import { InvalidCursorError } from "./db/emails.js";
+import type { NoncesRepo } from "./db/nonces.js";
 
 const kp = generateKeypair();
 
@@ -21,6 +22,8 @@ function signed(method: string, path: string, body = "") {
 
 const agent = { agentId: "482913", address: "482913@d", status: "active" as const, publicKey: kp.publicKeySpkiBase64, createdAt: "t" };
 
+const permissiveNonces: NoncesRepo = { recordOnce: async () => true } as never;
+
 function makeDeps(overrides: Record<string, unknown> = {}): Deps {
   return {
     agents: {
@@ -34,6 +37,7 @@ function makeDeps(overrides: Record<string, unknown> = {}): Deps {
       getEmail: vi.fn(async () => undefined),
       ...overrides,
     } as never,
+    nonces: permissiveNonces,
     readBody: vi.fn(async () => ({ text: "overflow", html: undefined, links: [] })),
     fleetKeyRequired: true,
   };

@@ -5,6 +5,7 @@ import { handle } from "hono/aws-lambda";
 import { createApp } from "./app.js";
 import { AgentsRepo } from "./db/agents.js";
 import { EmailsRepo } from "./db/emails.js";
+import { NoncesRepo } from "./db/nonces.js";
 
 const table = process.env.TABLE_NAME!;
 const domain = process.env.MAIL_DOMAIN!;
@@ -17,6 +18,7 @@ const s3 = new S3Client({});
 const app = createApp({
   agents: new AgentsRepo(ddb, table, domain),
   emails: new EmailsRepo(ddb, table, retentionDays),
+  nonces: new NoncesRepo(ddb, table),
   readBody: async (key) => {
     const res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
     return JSON.parse(await res.Body!.transformToString());

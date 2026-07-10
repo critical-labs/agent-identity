@@ -1,6 +1,7 @@
 import { canonicalString, fingerprint, verify } from "@agent-identity/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AgentRecord, AgentsRepo } from "./db/agents.js";
+import type { NoncesRepo } from "./db/nonces.js";
 
 const SKEW_MS = 300_000;
 
@@ -11,7 +12,7 @@ declare module "hono" {
   }
 }
 
-export function signatureAuth(agents: AgentsRepo): MiddlewareHandler {
+export function signatureAuth(agents: AgentsRepo, nonces: NoncesRepo): MiddlewareHandler {
   return async (c, next) => {
     const key = c.req.header("x-agent-key");
     const ts = c.req.header("x-agent-timestamp");
@@ -30,13 +31,20 @@ export function signatureAuth(agents: AgentsRepo): MiddlewareHandler {
     const message = canonicalString(c.req.method, pathWithQuery, ts, body);
     if (!verify(message, sig, key)) return c.json({ error: "invalid signature" }, 401);
 
+    // Compute fingerprint once; reused for nonce key and agent lookup.
+    const fp = fingerprint(key);
+
+    // Ed25519 is deterministic, so an identical legitimate request in the same
+    // millisecond is indistinguishable from a replay; we reject both.
+    if (!(await nonces.recordOnce(fp, sig))) return c.json({ error: "replayed request" }, 401);
+
     c.set("verifiedPublicKey", key);
 
     // /register is the only route allowed before an agent record exists;
     // signature possession is proven above, fleet key is checked in the route.
     if (c.req.method === "POST" && url.pathname === "/register") return next();
 
-    const agent = await agents.getByFingerprint(fingerprint(key));
+    const agent = await agents.getByFingerprint(fp);
     if (!agent) return c.json({ error: "unknown agent" }, 401);
     if (agent.status !== "active") return c.json({ error: "revoked" }, 403);
     c.set("agent", agent);

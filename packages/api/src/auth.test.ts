@@ -3,10 +3,13 @@ import { Hono } from "hono";
 import { describe, expect, it, vi } from "vitest";
 import { signatureAuth } from "./auth.js";
 import type { AgentsRepo } from "./db/agents.js";
+import type { NoncesRepo } from "./db/nonces.js";
 
-function makeApp(repo: Partial<AgentsRepo>) {
+const permissiveNonces: NoncesRepo = { recordOnce: async () => true } as never;
+
+function makeApp(repo: Partial<AgentsRepo>, nonces: NoncesRepo = permissiveNonces) {
   const app = new Hono();
-  app.use("*", signatureAuth(repo as AgentsRepo));
+  app.use("*", signatureAuth(repo as AgentsRepo, nonces));
   app.get("/me", (c) => c.json(c.get("agent" as never)));
   return app;
 }
@@ -64,5 +67,27 @@ describe("signatureAuth", () => {
     const app = makeApp({ getByFingerprint: vi.fn(async () => undefined) as never });
     const res = await app.request("/me", { headers: signedHeaders(kp, "/me") });
     expect(res.status).toBe(401);
+  });
+
+  it("rejects a replayed request with 401", async () => {
+    const seen = new Set<string>();
+    const trackingNonces: NoncesRepo = {
+      recordOnce: async (fpArg: string, sig: string) => {
+        const key = fpArg + sig;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      },
+    } as never;
+    const app = makeApp(
+      { getByFingerprint: vi.fn(async (f) => (f === fp ? agent : undefined)) as never },
+      trackingNonces,
+    );
+    const headers = signedHeaders(kp, "/me");
+    const first = await app.request("/me", { headers });
+    expect(first.status).toBe(200);
+    const second = await app.request("/me", { headers });
+    expect(second.status).toBe(401);
+    expect(await second.json()).toEqual({ error: "replayed request" });
   });
 });
