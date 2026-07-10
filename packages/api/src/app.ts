@@ -3,17 +3,19 @@ import { Hono } from "hono";
 import { signatureAuth } from "./auth.js";
 import type { AgentsRepo } from "./db/agents.js";
 import { InvalidCursorError, type EmailsRepo } from "./db/emails.js";
+import type { NoncesRepo } from "./db/nonces.js";
 
 export interface Deps {
   agents: AgentsRepo;
   emails: EmailsRepo;
+  nonces: NoncesRepo;
   readBody: (s3Key: string) => Promise<{ text: string; html?: string; links: string[] }>;
   fleetKeyRequired: boolean;
 }
 
 export function createApp(deps: Deps): Hono {
   const app = new Hono();
-  app.use("*", signatureAuth(deps.agents));
+  app.use("*", signatureAuth(deps.agents, deps.nonces));
 
   app.post("/register", async (c) => {
     if (deps.fleetKeyRequired) {
