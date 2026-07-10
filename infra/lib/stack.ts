@@ -49,7 +49,12 @@ export class AgentIdentityStack extends Stack {
     };
     const fnDefaults = {
       runtime: Runtime.NODEJS_20_X,
-      bundling: { format: OutputFormat.ESM },
+      bundling: {
+        format: OutputFormat.ESM,
+        // mailparser (CJS) calls require("stream") at module scope; esbuild's
+        // ESM output stubs require() with a throw unless we provide a real one.
+        banner: "import { createRequire } from 'node:module'; const require = createRequire(import.meta.url);",
+      },
       environment: commonEnv,
     };
 
