@@ -1,9 +1,10 @@
-import { encodeTime, ulid, type EmailFull, type EmailSummary } from "@agent-identity/shared";
+import { deterministicUlid, encodeTime, type EmailFull, type EmailSummary } from "@agent-identity/shared";
 import {
   DynamoDBDocumentClient, GetCommand, PutCommand, QueryCommand,
 } from "@aws-sdk/lib-dynamodb";
 
 export interface NewEmail {
+  messageId: string;
   from: string;
   subject: string;
   receivedAt: string;
@@ -32,7 +33,7 @@ export class EmailsRepo {
   ) {}
 
   async putEmail(agentId: string, email: NewEmail): Promise<string> {
-    const id = ulid(Date.parse(email.receivedAt));
+    const id = deterministicUlid(Date.parse(email.receivedAt), email.messageId);
     const expiresAt =
       Math.floor(Date.parse(email.receivedAt) / 1000) + this.retentionDays * 24 * 3600;
     await this.ddb.send(new PutCommand({

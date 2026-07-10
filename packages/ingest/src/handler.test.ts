@@ -32,6 +32,7 @@ describe("processRecord", () => {
     const deps = makeDeps();
     await processRecord(sesRecord() as never, deps);
     expect(deps.emails.putEmail).toHaveBeenCalledWith("482913", expect.objectContaining({
+      messageId: "m1",
       from: expect.stringContaining("a@b.c"),
       subject: "s",
       receivedAt: "2026-07-04T10:00:00.000Z",

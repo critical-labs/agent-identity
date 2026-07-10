@@ -12,6 +12,7 @@ describe("EmailsRepo", () => {
   it("putEmail writes MAILBOX partition with 90-day TTL", async () => {
     ddb.on(PutCommand).resolves({});
     const id = await repo.putEmail("482913", {
+      messageId: "m1",
       from: "noreply@github.com", subject: "Verify",
       receivedAt: "2026-07-04T10:00:00.000Z",
       text: "hi", links: ["https://github.com/v"], rawS3Key: "raw/m1",
@@ -49,5 +50,21 @@ describe("EmailsRepo", () => {
   it("getEmail returns undefined for another agent's email", async () => {
     ddb.on(GetCommand).resolves({});
     expect(await repo.getEmail("482913", "01ABC")).toBeUndefined();
+  });
+
+  it("putEmail is idempotent: same messageId + receivedAt yields same id and SK", async () => {
+    ddb.on(PutCommand).resolves({});
+    const email = {
+      from: "noreply@github.com", subject: "Verify",
+      receivedAt: "2026-07-04T10:00:00.000Z",
+      messageId: "ses-unique-message-id-xyz",
+      text: "hi", links: [], rawS3Key: "raw/ses-unique-message-id-xyz",
+    };
+    const id1 = await repo.putEmail("482913", email);
+    const id2 = await repo.putEmail("482913", email);
+    expect(id1).toBe(id2);
+    const calls = ddb.commandCalls(PutCommand);
+    expect(calls[0].args[0].input.Item!.SK).toBe(`EMAIL#${id1}`);
+    expect(calls[1].args[0].input.Item!.SK).toBe(`EMAIL#${id1}`);
   });
 });
