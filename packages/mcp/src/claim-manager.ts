@@ -102,11 +102,11 @@ export class ClaimManager {
       await this.claim(effective);
     }
     const identity = await this.held!.client.register();
-    savePoolProfile(
-      { ...this.held!.claim.profile, ...identity }, this.opts.base,
-    );
     this.held!.claim.profile.agentId = identity.agentId;
     this.held!.claim.profile.address = identity.address;
+    savePoolProfile(
+      { ...this.held!.claim.profile, agentId: identity.agentId }, this.opts.base,
+    );
     return identity;
   }
 

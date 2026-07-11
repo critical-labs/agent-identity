@@ -1,5 +1,5 @@
 import { savePoolProfile } from "@agent-identity/client";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -103,6 +103,8 @@ describe("ClaimManager", () => {
     await mgr.init();
     await expect(mgr.ensureIdentity(["github"])).rejects.toThrow(NoIdentityError);
     expect(mgr.status().held?.name).toBe("111111");
+    // the lock must still exist on disk — the old claim was never released
+    expect(existsSync(join(dir, "claims", "111111.lock"))).toBe(true);
     mgr.release();
   });
 });
