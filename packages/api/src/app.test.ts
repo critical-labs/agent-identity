@@ -65,7 +65,24 @@ describe("app", () => {
   it("GET /me returns caller identity", async () => {
     const app = createApp(makeDeps());
     const res = await app.request("/me", signed("GET", "/me"));
-    expect(await res.json()).toEqual({ agentId: "482913", address: "482913@d" });
+    expect(await res.json()).toEqual({ agentId: "482913", address: "482913@d", capabilities: [] });
+  });
+
+  it("GET /me returns capabilities (empty when untagged)", async () => {
+    const app = createApp(makeDeps());
+    const res = await app.request("/me", signed("GET", "/me"));
+    expect(await res.json()).toEqual({ agentId: "482913", address: "482913@d", capabilities: [] });
+  });
+
+  it("GET /me returns capabilities when the record is tagged", async () => {
+    const deps = makeDeps({
+      getByFingerprint: vi.fn(async () => ({ ...agent, capabilities: ["github"] })) as never,
+    });
+    const app = createApp(deps);
+    const res = await app.request("/me", signed("GET", "/me"));
+    expect(await res.json()).toEqual(
+      expect.objectContaining({ capabilities: ["github"] }),
+    );
   });
 
   it("GET /emails passes since/limit and scopes to caller", async () => {
