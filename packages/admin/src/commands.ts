@@ -20,6 +20,7 @@ export interface AgentRow {
   agentId: string;
   address: string;
   status: string;
+  capabilities: string;
 }
 
 export async function listAgents(
@@ -35,21 +36,57 @@ export async function listAgents(
     agentId: i.agentId as string,
     address: i.address as string,
     status: i.status as string,
+    capabilities: ((i.capabilities as string[]) ?? []).join(","),
   }));
+}
+
+async function agentKeyByLocalPart(
+  ddb: DynamoDBDocumentClient, table: string, agentId: string,
+): Promise<{ PK: string; SK: string }> {
+  const { Item } = await ddb.send(new GetCommand({
+    TableName: table, Key: { PK: `ADDR#${agentId}`, SK: "ADDR" },
+  }));
+  if (!Item) throw new Error(`no agent with id ${agentId}`);
+  return { PK: `AGENT#${Item.fingerprint}`, SK: "AGENT" };
 }
 
 export async function revokeAgent(
   ddb: DynamoDBDocumentClient, table: string, agentId: string,
 ): Promise<void> {
-  const { Item } = await ddb.send(new GetCommand({
-    TableName: table, Key: { PK: `ADDR#${agentId}`, SK: "ADDR" },
-  }));
-  if (!Item) throw new Error(`no agent with id ${agentId}`);
+  const key = await agentKeyByLocalPart(ddb, table, agentId);
   await ddb.send(new UpdateCommand({
     TableName: table,
-    Key: { PK: `AGENT#${Item.fingerprint}`, SK: "AGENT" },
+    Key: key,
     UpdateExpression: "SET #s = :r",
     ExpressionAttributeNames: { "#s": "status" },
     ExpressionAttributeValues: { ":r": "revoked" },
   }));
+}
+
+async function setCapabilities(
+  ddb: DynamoDBDocumentClient, table: string, agentId: string,
+  mutate: (caps: Set<string>) => void,
+): Promise<void> {
+  const key = await agentKeyByLocalPart(ddb, table, agentId);
+  const { Item } = await ddb.send(new GetCommand({ TableName: table, Key: key }));
+  const caps = new Set<string>((Item?.capabilities as string[]) ?? []);
+  mutate(caps);
+  await ddb.send(new UpdateCommand({
+    TableName: table,
+    Key: key,
+    UpdateExpression: "SET capabilities = :c",
+    ExpressionAttributeValues: { ":c": [...caps].sort() },
+  }));
+}
+
+export function tagAgent(
+  ddb: DynamoDBDocumentClient, table: string, agentId: string, capability: string,
+): Promise<void> {
+  return setCapabilities(ddb, table, agentId, (caps) => caps.add(capability));
+}
+
+export function untagAgent(
+  ddb: DynamoDBDocumentClient, table: string, agentId: string, capability: string,
+): Promise<void> {
+  return setCapabilities(ddb, table, agentId, (caps) => caps.delete(capability));
 }

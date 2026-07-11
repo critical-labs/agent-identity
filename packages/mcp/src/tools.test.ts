@@ -7,16 +7,32 @@ function makeClient(over: Record<string, unknown> = {}) {
     listEmails: vi.fn(async () => ({ emails: [] })),
     getEmail: vi.fn(async () => ({ id: "01A", from: "a", subject: "s", receivedAt: "t", text: "b", links: [] })),
     ...over,
+  };
+}
+
+function makeManager(client = makeClient()) {
+  return {
+    client: () => client,
+    ensureIdentity: vi.fn(async (_require?: string[]) => ({ agentId: "482913", address: "482913@d" })),
+    status: vi.fn(() => ({ held: { name: "482913", capabilities: [] }, pool: { total: 1, free: 0, freeByCapability: {} } })),
   } as never;
 }
 
 describe("mcp tools", () => {
-  it("ensure_identity registers and persists identity to profile", async () => {
-    const save = vi.fn();
-    const tools = makeTools(makeClient(), save);
-    const res = await tools.ensureIdentity();
+  it("ensure_identity delegates to the manager with require", async () => {
+    const mgr = makeManager();
+    const tools = makeTools(mgr);
+    const res = await tools.ensureIdentity({ require: ["github"] });
     expect(res).toEqual({ agentId: "482913", address: "482913@d" });
-    expect(save).toHaveBeenCalledWith({ agentId: "482913", address: "482913@d" });
+    expect((mgr as { ensureIdentity: ReturnType<typeof vi.fn> }).ensureIdentity)
+      .toHaveBeenCalledWith(["github"]);
+  });
+
+  it("identity_status reports manager status", () => {
+    const tools = makeTools(makeManager());
+    expect(tools.identityStatus()).toEqual(
+      expect.objectContaining({ held: expect.objectContaining({ name: "482913" }) }),
+    );
   });
 
   it("wait_for_email returns first match", async () => {
@@ -28,7 +44,7 @@ describe("mcp tools", () => {
         ],
       })),
     });
-    const tools = makeTools(client, vi.fn());
+    const tools = makeTools(makeManager(client));
     const res = await tools.waitForEmail(
       { fromContains: "github", timeoutSeconds: 1 }, { pollMs: 10 },
     );
@@ -36,7 +52,7 @@ describe("mcp tools", () => {
   });
 
   it("wait_for_email times out cleanly (result, not throw)", async () => {
-    const tools = makeTools(makeClient(), vi.fn());
+    const tools = makeTools(makeManager());
     const res = await tools.waitForEmail({ subjectContains: "never", timeoutSeconds: 0.05 }, { pollMs: 10 });
     expect(res).toEqual({ timedOut: true });
   });

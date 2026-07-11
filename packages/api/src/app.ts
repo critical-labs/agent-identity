@@ -29,8 +29,8 @@ export function createApp(deps: Deps): Hono {
   });
 
   app.get("/me", (c) => {
-    const { agentId, address } = c.get("agent");
-    return c.json({ agentId, address });
+    const { agentId, address, capabilities } = c.get("agent");
+    return c.json({ agentId, address, capabilities: capabilities ?? [] });
   });
 
   app.get("/emails", async (c) => {

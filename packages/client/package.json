@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "exports": { ".": "./src/index.ts" },
-  "dependencies": { "@agent-identity/shared": "workspace:*" }
+  "bin": { "agent-identity": "./src/cli.ts" },
+  "dependencies": {
+    "@agent-identity/shared": "workspace:*",
+    "commander": "^12.1.0"
+  }
 }

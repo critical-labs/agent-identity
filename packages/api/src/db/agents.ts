@@ -8,6 +8,7 @@ export interface AgentRecord extends AgentIdentity {
   publicKey: string;
   status: "active" | "revoked";
   createdAt: string;
+  capabilities?: string[]; // operator-set via mailctl; registration never sets it
 }
 
 export class AgentsRepo {
