@@ -159,3 +159,32 @@ export async function claimSpecific(
   if (await tryLock(base, name, pid, isAlive)) return makeClaim(base, name, entry.profile);
   return undefined;
 }
+
+export interface PoolStatus {
+  total: number;
+  free: number;
+  freeByCapability: Record<string, number>;
+}
+
+function isFree(base: string | undefined, name: string, isAlive: (pid: number) => boolean): boolean {
+  try {
+    const lock = JSON.parse(
+      readFileSync(join(claimsDir(base), `${name}.lock`), "utf8"),
+    ) as { pid?: number };
+    return lock.pid === undefined || !isAlive(lock.pid);
+  } catch {
+    return true; // no lock (or unreadable = stale) = free
+  }
+}
+
+export function poolStatus(
+  opts: { base?: string; isAlive?: (pid: number) => boolean } = {},
+): PoolStatus {
+  const { base, isAlive = defaultIsAlive } = opts;
+  const pool = listPool(base);
+  const freeProfiles = pool.filter((p) => isFree(base, p.name, isAlive));
+  const freeByCapability: Record<string, number> = {};
+  const githubFree = freeProfiles.filter((p) => p.profile.github !== undefined).length;
+  if (githubFree > 0) freeByCapability.github = githubFree;
+  return { total: pool.length, free: freeProfiles.length, freeByCapability };
+}

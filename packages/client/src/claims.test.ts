@@ -1,9 +1,9 @@
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
-  claimFromPool, claimSpecific, hasCapabilities, linkGithub, listPool, poolDir, savePoolProfile,
+  claimFromPool, claimSpecific, claimsDir, hasCapabilities, linkGithub, listPool, poolDir, poolStatus, savePoolProfile,
   type PoolProfile,
 } from "./claims.js";
 
@@ -116,5 +116,53 @@ describe("claiming", () => {
     const claim = await claimSpecific("222222", { base: dir });
     expect(claim?.name).toBe("222222");
     expect(await claimSpecific("222222", { base: dir })).toBeUndefined();
+  });
+});
+
+describe("stale locks and status", () => {
+  const deadLock = (dir: string, name: string) => {
+    mkdirSync(claimsDir(dir), { recursive: true });
+    writeFileSync(
+      join(claimsDir(dir), `${name}.lock`),
+      JSON.stringify({ pid: 99999999, claimedAt: "t", host: "h" }),
+    );
+  };
+
+  it("takes over a lock whose pid is dead", async () => {
+    const dir = base();
+    savePoolProfile(profile("111111"), dir);
+    deadLock(dir, "111111");
+    const claim = await claimFromPool({ base: dir, isAlive: () => false });
+    expect(claim?.name).toBe("111111");
+  });
+
+  it("does not take over a lock whose pid is alive", async () => {
+    const dir = base();
+    savePoolProfile(profile("111111"), dir);
+    deadLock(dir, "111111");
+    expect(await claimFromPool({ base: dir, isAlive: () => true })).toBeUndefined();
+  });
+
+  it("treats a corrupt lock file as stale", async () => {
+    const dir = base();
+    savePoolProfile(profile("111111"), dir);
+    mkdirSync(claimsDir(dir), { recursive: true });
+    writeFileSync(join(claimsDir(dir), "111111.lock"), "{nope");
+    const claim = await claimFromPool({ base: dir, isAlive: () => true });
+    expect(claim?.name).toBe("111111");
+  });
+
+  it("poolStatus counts free/claimed and by capability", async () => {
+    const dir = base();
+    savePoolProfile(profile("111111"), dir);
+    savePoolProfile(profile("222222", { username: "x" }), dir);
+    savePoolProfile(profile("333333", { username: "y" }), dir);
+    await claimSpecific("222222", { base: dir });
+    const status = poolStatus({ base: dir });
+    expect(status).toEqual({
+      total: 3,
+      free: 2,
+      freeByCapability: { github: 1 },
+    });
   });
 });
