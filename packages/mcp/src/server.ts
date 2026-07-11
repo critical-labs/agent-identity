@@ -5,13 +5,13 @@ import { z } from "zod";
 import { ClaimManager } from "./claim-manager.js";
 import { makeTools } from "./tools.js";
 
-const require = (process.env.AGENT_IDENTITY_REQUIRE ?? "")
+const requiredCaps = (process.env.AGENT_IDENTITY_REQUIRE ?? "")
   .split(",").map((s) => s.trim()).filter(Boolean);
 
 const manager = new ClaimManager({
   apiUrl: process.env.AGENT_IDENTITY_API_URL!,
   fleetKey: process.env.AGENT_IDENTITY_FLEET_KEY,
-  require,
+  require: requiredCaps,
 });
 await manager.init();
 
