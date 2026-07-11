@@ -1,30 +1,45 @@
 #!/usr/bin/env -S npx tsx
-import { AgentIdentityClient, loadOrCreateProfile, saveProfile } from "@agent-identity/client";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { ClaimManager } from "./claim-manager.js";
 import { makeTools } from "./tools.js";
 
-const profileName = process.env.AGENT_IDENTITY_PROFILE ?? "default";
-const profile = loadOrCreateProfile(profileName);
-const client = new AgentIdentityClient({
-  apiUrl: process.env.AGENT_IDENTITY_API_URL!,
-  keypair: profile,
-  fleetKey: process.env.AGENT_IDENTITY_FLEET_KEY,
-});
-const tools = makeTools(client, (id) =>
-  saveProfile({ ...profile, ...id }, profileName));
+const require = (process.env.AGENT_IDENTITY_REQUIRE ?? "")
+  .split(",").map((s) => s.trim()).filter(Boolean);
 
+const manager = new ClaimManager({
+  apiUrl: process.env.AGENT_IDENTITY_API_URL!,
+  fleetKey: process.env.AGENT_IDENTITY_FLEET_KEY,
+  require,
+});
+await manager.init();
+
+process.on("exit", () => manager.release());
+for (const sig of ["SIGINT", "SIGTERM"] as const) {
+  process.on(sig, () => process.exit(0));
+}
+
+const tools = makeTools(manager);
 const server = new McpServer({ name: "agent-identity", version: "0.1.0" });
 const json = (v: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(v, null, 2) }] });
 
 server.registerTool(
   "ensure_identity",
   {
-    description: "Load or create this agent's identity and mailbox address. Idempotent; call at session start.",
+    description: "Claim/confirm this session's identity and mailbox address. Idempotent; call at session start. Pass require:[\"github\"] to swap to a GitHub-capable identity.",
+    inputSchema: { require: z.array(z.string()).optional() },
+  },
+  async (args) => json(await tools.ensureIdentity(args)),
+);
+
+server.registerTool(
+  "identity_status",
+  {
+    description: "Show the identity this session holds, its capabilities, and pool availability.",
     inputSchema: {},
   },
-  async () => json(await tools.ensureIdentity()),
+  async () => json(tools.identityStatus()),
 );
 
 server.registerTool(

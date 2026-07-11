@@ -1,5 +1,5 @@
-import type { AgentIdentityClient } from "@agent-identity/client";
-import type { AgentIdentity, EmailSummary } from "@agent-identity/shared";
+import type { EmailSummary } from "@agent-identity/shared";
+import type { ClaimManager } from "./claim-manager.js";
 
 export interface WaitArgs {
   fromContains?: string;
@@ -9,23 +9,22 @@ export interface WaitArgs {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-export function makeTools(
-  client: AgentIdentityClient,
-  persistIdentity: (id: AgentIdentity) => void,
-) {
+export function makeTools(manager: ClaimManager) {
   return {
-    async ensureIdentity(): Promise<AgentIdentity> {
-      const identity = await client.register();
-      persistIdentity(identity);
-      return identity;
+    ensureIdentity(args: { require?: string[] } = {}) {
+      return manager.ensureIdentity(args.require);
+    },
+
+    identityStatus() {
+      return manager.status();
     },
 
     listEmails(opts: { since?: string; limit?: number }) {
-      return client.listEmails(opts);
+      return manager.client().listEmails(opts);
     },
 
     getEmail(id: string) {
-      return client.getEmail(id);
+      return manager.client().getEmail(id);
     },
 
     async waitForEmail(
@@ -40,7 +39,7 @@ export function makeTools(
         (!args.fromContains || e.from.toLowerCase().includes(args.fromContains.toLowerCase())) &&
         (!args.subjectContains || e.subject.toLowerCase().includes(args.subjectContains.toLowerCase()));
       for (;;) {
-        const { emails } = await client.listEmails({ since, limit: 50 });
+        const { emails } = await manager.client().listEmails({ since, limit: 50 });
         const hit = emails.find(matches);
         if (hit) return hit;
         if (Date.now() >= deadline) return { timedOut: true };
