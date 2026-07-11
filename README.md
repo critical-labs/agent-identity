@@ -16,15 +16,54 @@ Add the MCP server to your Claude (or compatible) client config:
       "args": ["tsx", "/path/to/agent-identity/packages/mcp/src/server.ts"],
       "env": {
         "AGENT_IDENTITY_API_URL": "https://<api-id>.execute-api.<region>.amazonaws.com",
-        "AGENT_IDENTITY_FLEET_KEY": "<from mailctl fleet-key create>",
-        "AGENT_IDENTITY_PROFILE": "default"
+        "AGENT_IDENTITY_FLEET_KEY": "<from mailctl fleet-key create>"
       }
     }
   }
 }
 ```
 
-Call `ensure_identity` at the start of every session — it loads or creates your keypair, registers with the server (idempotent), and returns your `agentId` and `address`. The other tools are `list_emails` (returns summaries with id, from, subject, receivedAt), `get_email` (returns full text body and extracted links for a given id), and `wait_for_email` (polls until a matching message arrives; when the timeout elapses it returns `{timedOut: true}` as a clean result, not an error). Following links in retrieved emails is the agent's own job — the server does not fetch URLs.
+Call `ensure_identity` at the start of every session — it claims an identity from the local pool (creating one if the pool is empty), registers with the server (idempotent), and returns your `agentId` and `address`. The other tools are `list_emails` (returns summaries with id, from, subject, receivedAt), `get_email` (returns full text body and extracted links for a given id), `wait_for_email` (polls until a matching message arrives; when the timeout elapses it returns `{timedOut: true}` as a clean result, not an error), and `identity_status` (shows what this session holds and what is free in the pool). Following links in retrieved emails is the agent's own job — the server does not fetch URLs.
+
+## Session identity claiming
+
+Each MCP server process claims one identity from a machine-local pool at startup and holds it for its lifetime. Concurrent sessions get distinct identities; identities are reused across sessions rather than re-created.
+
+### Pool layout
+
+```
+~/.config/agent-identity/
+  pool/<agentId>.json   claimable profiles (keypair + address + optional github block)
+  claims/<agentId>.lock existence = claimed; contains {pid, claimedAt, host}
+```
+
+Profiles outside `pool/` (e.g. `default.json`) are never claimed.
+
+### Requiring a GitHub-capable identity
+
+Set `AGENT_IDENTITY_REQUIRE=github` in the MCP server's env (e.g. in `.mcp.json`). The agent can also call `ensure_identity` with `{"require": ["github"]}` to swap mid-session. If no GitHub-capable identity is free, the claim fails with remediation instructions — it is never auto-created. A plain identity IS auto-created (and added to the pool) when the pool is exhausted, using `AGENT_IDENTITY_FLEET_KEY`.
+
+Use the `identity_status` tool to see what is held and what is free.
+
+### Onboarding a GitHub-capable identity
+
+1. A session claims/mints a plain identity, e.g. `482913@<domain>`.
+2. A human creates the GitHub account with that address (form + CAPTCHA); the agent fetches the verification email via `wait_for_email`.
+3. `mailctl agent tag 482913 github`
+4. `agent-identity github link 482913 --username <gh-login> [--credential-ref op://...]`
+
+### Stuck locks
+
+A crashed holder's lock is reclaimed automatically (dead-PID detection). After a reboot, PID reuse can rarely leave a stale lock that looks live: delete the file in `~/.config/agent-identity/claims/` by hand.
+
+### Optional SessionStart hook
+
+Claiming needs no hook. To surface the identity to the agent at session start, add to `.claude/settings.json`:
+
+```json
+{ "hooks": { "SessionStart": [{ "hooks": [{ "type": "command",
+  "command": "echo 'agent-identity MCP is available; call ensure_identity before workflows needing email.'" }] }] } }
+```
 
 ## Deploy (operator)
 
