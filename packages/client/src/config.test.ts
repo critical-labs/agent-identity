@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, statSync } from "node:fs";
+import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -19,6 +19,8 @@ describe("machine config", () => {
 
   it("returns {} when missing or corrupt", () => {
     const dir = base();
+    expect(readMachineConfig(dir)).toEqual({});
+    writeFileSync(join(dir, "config.json"), "{bad json");
     expect(readMachineConfig(dir)).toEqual({});
   });
 });
