@@ -2,7 +2,7 @@
   "name": "@agent-identity/client",
   "version": "0.1.0",
   "type": "module",
-  "exports": { ".": "./src/index.ts" },
+  "exports": { ".": "./src/index.ts", "./cli": "./src/cli.ts" },
   "bin": { "agent-identity": "./src/cli.ts" },
   "dependencies": {
     "@agent-identity/shared": "workspace:*",
