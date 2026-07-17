@@ -4,24 +4,40 @@
 
 agent-identity gives AI agents a persistent, verifiable identity whose first capability is a receive-only email mailbox backed by AWS SES. An agent's identity is an Ed25519 keypair generated client-side on first use and stored at `~/.config/agent-identity/<profile>.json`. Registration assigns a permanent random numeric ID; the mailbox address is `<id>@<domain>` — numbers only, no names. Identity and mailbox are born together and are immutable. The driving use case is GitHub onboarding: an agent needs an email address to create a GitHub account so it can author commits, open pull requests, and receive notifications. The project is open-source and self-hostable; the reference deployment is private, gated by a fleet key so only the operator's own agents may register.
 
-## Quick start (agent)
+## Quick start (consuming repo)
 
-Add the MCP server to your Claude (or compatible) client config:
+```bash
+npm install @critical-labs/agent-identity
+npx agent-identity setup
+```
+
+The setup wizard connects you to an existing deployment (API URL + fleet
+key) or guides a new AWS deployment step-by-step, optionally provisions
+pool identities, writes the `agent-identity` entry into `.mcp.json`, and
+installs the bundled Claude Code skill into `.claude/skills/`.
+
+The fleet key is stored at `~/.config/agent-identity/fleet_key` (mode 600)
+and the API URL at `~/.config/agent-identity/config.json`; `.mcp.json`
+contains no secrets. The MCP server reads `AGENT_IDENTITY_FLEET_KEY` from
+the environment first and falls back to the key file.
+
+Manual MCP configuration (what the wizard writes):
 
 ```json
 {
   "mcpServers": {
     "agent-identity": {
       "command": "npx",
-      "args": ["tsx", "/path/to/agent-identity/packages/mcp/src/server.ts"],
-      "env": {
-        "AGENT_IDENTITY_API_URL": "https://<api-id>.execute-api.<region>.amazonaws.com",
-        "AGENT_IDENTITY_FLEET_KEY": "<from mailctl fleet-key create>"
-      }
+      "args": ["agent-identity-mcp"],
+      "env": { "AGENT_IDENTITY_API_URL": "https://<api-id>.execute-api.<region>.amazonaws.com" }
     }
   }
 }
 ```
+
+Other CLI commands: `npx agent-identity pool provision --count N` (mint
+identities into the machine-local pool), `npx agent-identity pool status`,
+`npx agent-identity github link <agentId> --username <login>`.
 
 Call `ensure_identity` at the start of every session — it claims an identity from the local pool (creating one if the pool is empty), registers with the server (idempotent), and returns your `agentId` and `address`. The other tools are `list_emails` (returns summaries with id, from, subject, receivedAt), `get_email` (returns full text body and extracted links for a given id), `wait_for_email` (polls until a matching message arrives; when the timeout elapses it returns `{timedOut: true}` as a clean result, not an error), and `identity_status` (shows what this session holds and what is free in the pool). Following links in retrieved emails is the agent's own job — the server does not fetch URLs.
 
@@ -129,6 +145,15 @@ One-time setup (run in CloudShell, or any shell with admin credentials, in your 
 5. Run the **deploy** workflow from the Actions tab. The job summary lists the stack outputs and the remaining manual steps (DNS MX record, SES domain verification, fleet key). The workflow activates the SES receipt rule set automatically.
 
 If the deploy job fails at `configure-aws-credentials`, the usual cause is a trust-policy mismatch: the role only trusts `repo:critical-labs/agent-identity:environment:production`, so the environment name and repository must match exactly.
+
+### Releasing to npm
+
+Bump `version` in `packages/dist/package.json`, commit, then tag and push:
+`git tag v<version> && git push origin v<version>`. The publish workflow
+tests, builds, smoke-tests the bins, and publishes
+`@critical-labs/agent-identity` with provenance. One-time setup: create the
+`critical-labs` npm org and add an automation token as the `NPM_TOKEN`
+repository secret.
 
 ## GitHub onboarding flow
 
