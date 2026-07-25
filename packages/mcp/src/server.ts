@@ -2,6 +2,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
+import { resolveFleetKey } from "@agent-identity/client";
 import { ClaimManager } from "./claim-manager.js";
 import { makeTools } from "./tools.js";
 
@@ -10,7 +11,7 @@ const requiredCaps = (process.env.AGENT_IDENTITY_REQUIRE ?? "")
 
 const manager = new ClaimManager({
   apiUrl: process.env.AGENT_IDENTITY_API_URL!,
-  fleetKey: process.env.AGENT_IDENTITY_FLEET_KEY,
+  fleetKey: resolveFleetKey(),
   require: requiredCaps,
 });
 await manager.init();

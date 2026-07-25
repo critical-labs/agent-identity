@@ -1,6 +1,7 @@
 node_modules/
-dist/
+/dist/
 cdk.out/
 *.tsbuildinfo
 .env
 .claude/
+packages/dist/dist/
