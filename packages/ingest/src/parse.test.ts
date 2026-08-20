@@ -29,4 +29,31 @@ describe("extractLinks", () => {
     );
     expect(links).toEqual(["https://a.example/x", "https://b.example/y"]);
   });
+
+  it("decodes HTML entities in links extracted from HTML", () => {
+    const links = extractLinks(
+      "",
+      '<a href="https://e.example/verify?a=1&amp;b=2">verify</a>',
+    );
+    expect(links).toContain("https://e.example/verify?a=1&b=2");
+    expect(links).not.toContain("https://e.example/verify?a=1&amp;b=2");
+  });
+
+  it("decodes numeric character references in HTML links", () => {
+    const links = extractLinks(
+      "",
+      '<a href="https://e.example/?d=1&#38;e=2&#x26;f=3">x</a>',
+    );
+    expect(links).toContain("https://e.example/?d=1&e=2&f=3");
+  });
+
+  it("tolerates out-of-range numeric references without throwing", () => {
+    const links = extractLinks("", '<a href="https://e.example/?bad=&#99999999;">x</a>');
+    expect(links).toContain("https://e.example/?bad=&#99999999;");
+  });
+
+  it("leaves plain-text URLs undecoded", () => {
+    const links = extractLinks("literal https://e.example/?a=1&amp;b=2 here");
+    expect(links).toEqual(["https://e.example/?a=1&amp;b=2"]);
+  });
 });
