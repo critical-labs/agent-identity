@@ -1,4 +1,4 @@
-import { defineConfig } from "tsup";
+import { defineConfig, type Options } from "tsup";
 
 const common = {
   format: ["esm"],
@@ -6,7 +6,7 @@ const common = {
   target: "node20",
   splitting: false,
   noExternal: [/^@agent-identity\//],
-} as const;
+} satisfies Options;
 
 export default defineConfig([
   {
