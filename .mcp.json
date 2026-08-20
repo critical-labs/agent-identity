@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "agent-identity": {
+      "command": "agent-identity-mcp",
+      "args": [],
+      "env": {
+        "AGENT_IDENTITY_API_URL": "https://hs7ymi173j.execute-api.us-east-1.amazonaws.com"
+      }
+    }
+  }
+}
