@@ -71,7 +71,7 @@ export interface CommentResult {
   url: string;
 }
 
-export interface ProvisionResult {
+export interface ForgeProvisionResult {
   username: string;
   email: string;
 }
@@ -189,7 +189,7 @@ Expected: FAIL — cannot resolve `./forge.js`.
 
 ```ts
 import type {
-  CommentResult, CommitResult, CommitSpec, PrResult, PrSpec, ProvisionResult,
+  CommentResult, CommitResult, CommitSpec, PrResult, PrSpec, ForgeProvisionResult,
   RepoInfo, RepoRef,
 } from "@agent-identity/shared";
 
@@ -243,7 +243,7 @@ export interface CredentialStore {
 }
 
 export interface Provisioner {
-  provision(actor: Author): Promise<ProvisionResult>;
+  provision(actor: Author): Promise<ForgeProvisionResult>;
 }
 ```
 
@@ -1412,7 +1412,7 @@ Extend the shared import at the top of `client.ts`:
 import {
   canonicalString, sign, type AgentIdentity, type CommentResult, type CommitResult,
   type CommitSpec, type EmailFull, type EmailSummary, type Keypair, type PrResult,
-  type PrSpec, type ProvisionResult, type RepoInfo, type RepoRef,
+  type PrSpec, type ForgeProvisionResult, type RepoInfo, type RepoRef,
 } from "@agent-identity/shared";
 ```
 
@@ -1438,7 +1438,7 @@ Add the methods:
       JSON.stringify({ owner: ref.owner, repo: ref.name, issue, body }));
   }
 
-  forgeProvision(service: string): Promise<ProvisionResult> {
+  forgeProvision(service: string): Promise<ForgeProvisionResult> {
     return this.request("POST", `/forge/${service}/provision`);
   }
 ```
@@ -2106,7 +2106,7 @@ Expected: FAIL — cannot resolve `./gitlab-provision.js`.
 `packages/proxy/src/gitlab-provision.ts`:
 
 ```ts
-import type { ProvisionResult } from "@agent-identity/shared";
+import type { ForgeProvisionResult } from "@agent-identity/shared";
 import { ForgeError, type Author, type Provisioner } from "./forge.js";
 
 export interface ProvisionerConfig {
@@ -2162,7 +2162,7 @@ export class GitlabProvisioner implements Provisioner {
     return res.json() as Promise<T>;
   }
 
-  async provision(actor: Author): Promise<ProvisionResult> {
+  async provision(actor: Author): Promise<ForgeProvisionResult> {
     const token = await this.opts.config.adminToken();
     const gid = await this.opts.config.groupId();
     const username = `agent-${actor.name}`;
