@@ -112,3 +112,72 @@ describe("proxy gating", () => {
     ]);
   });
 });
+
+describe("POST /forge/:service/commit", () => {
+  const path = "/forge/github/commit";
+  const body = JSON.stringify({
+    owner: "critical-labs", repo: "agent-identity", branch: "main",
+    message: "docs: update", files: [{ path: "README.md", content: "hi" }],
+  });
+
+  it("calls the adapter with the actor as forced author", async () => {
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ sha: "c1", url: "https://forge/c1" });
+    const [name, ref, spec, actor] = forge.calls[0]!;
+    expect(name).toBe("createCommit");
+    expect(ref).toEqual({ owner: "critical-labs", name: "agent-identity" });
+    expect(spec).toEqual({
+      branch: "main", message: "docs: update",
+      files: [{ path: "README.md", content: "hi" }],
+    });
+    expect(actor).toEqual({ name: "482913", email: "482913@agents.example" });
+  });
+
+  it("ignores any author field smuggled into the request body", async () => {
+    const smuggled = JSON.stringify({
+      owner: "o", repo: "r", branch: "b", message: "m",
+      files: [{ path: "f", content: "x" }],
+      author: { name: "mallory", email: "mallory@evil" },
+    });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    await app.request(path, { ...signed("POST", path, smuggled), body: smuggled });
+    const [, , , actor] = forge.calls[0]!;
+    expect(actor).toEqual({ name: "482913", email: "482913@agents.example" });
+  });
+
+  it("400s a body with missing fields", async () => {
+    const bad = JSON.stringify({ owner: "o", repo: "r" });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, bad), body: bad });
+    expect(res.status).toBe(400);
+    expect(forge.calls).toHaveLength(0);
+  });
+
+  it("maps NonFastForward to 409 and audits the error", async () => {
+    const { deps, forge, audit } = makeDeps();
+    forge.failWith = new ForgeError("non_fast_forward", "stale head", 422);
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe("non_fast_forward");
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "482913", service: "github", op: "commit",
+      outcome: "error", errorKind: "non_fast_forward", upstreamStatus: 422,
+    }));
+  });
+
+  it("audits successful operations", async () => {
+    const { deps, audit } = makeDeps();
+    const app = createProxyApp(deps);
+    await app.request(path, { ...signed("POST", path, body), body });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "482913", service: "github", op: "commit",
+      owner: "critical-labs", repo: "agent-identity", outcome: "ok",
+    }));
+  });
+});

@@ -77,5 +77,30 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     return run(c, g, op, () => g.forge.getRepo({ owner, name: repo }, g.actor));
   });
 
+  const isStr = (v: unknown): v is string => typeof v === "string" && v.length > 0;
+  const isFiles = (v: unknown): v is { path: string; content: string }[] =>
+    Array.isArray(v) && v.length > 0 &&
+    v.every((f) => isStr((f as { path?: unknown }).path) &&
+      typeof (f as { content?: unknown }).content === "string");
+
+  app.post("/forge/:service/commit", async (c) => {
+    const g = guard(c);
+    if (g instanceof Response) return g;
+    const b = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    if (!b || !isStr(b.owner) || !isStr(b.repo) || !isStr(b.branch)
+      || !isStr(b.message) || !isFiles(b.files)) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const op: ForgeOp = { service: g.service, kind: "commit", owner: b.owner, repo: b.repo };
+    return run(c, g, op, () => g.forge.createCommit(
+      { owner: b.owner as string, name: b.repo as string },
+      {
+        branch: b.branch as string, message: b.message as string,
+        files: b.files as { path: string; content: string }[],
+      },
+      g.actor,
+    ));
+  });
+
   return app;
 }
