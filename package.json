@@ -2,6 +2,7 @@
   "name": "agent-identity",
   "private": true,
   "type": "module",
+  "packageManager": "pnpm@11.9.0",
   "scripts": { "test": "vitest run" },
   "dependencies": {
     "@agent-identity/client": "workspace:*"
