@@ -30,6 +30,7 @@ export function createProxyApp(deps: ProxyDeps): Hono {
 
   const guard = (c: Context): Guarded | Response => {
     const service = c.req.param("service");
+    if (!service) return c.json({ error: "unknown_service" }, 404);
     const forge = deps.forges[service];
     if (!forge) return c.json({ error: "unknown_service" }, 404);
     const agent = c.get("agent") as AgentRecord;

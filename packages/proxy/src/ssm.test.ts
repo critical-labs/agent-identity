@@ -53,7 +53,7 @@ describe("SsmCredentialStore.resolve", () => {
 
 describe("SsmCredentialStore.put and getParam", () => {
   it("puts a per-identity SecureString with overwrite", async () => {
-    const send = vi.fn(async () => ({}));
+    const send = vi.fn(async (_cmd: unknown) => ({}));
     const store = new SsmCredentialStore("/agent-identity/forge", { send } as never);
     await store.put("gitlab", "482913", "newtok");
     const cmd = send.mock.calls[0]![0] as { input: Record<string, unknown> };
