@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import type { ClaimManager } from "./claim-manager.js";
 import { makeTools } from "./tools.js";
 
 function makeClient(over: Record<string, unknown> = {}) {
@@ -55,5 +56,59 @@ describe("mcp tools", () => {
     const tools = makeTools(makeManager());
     const res = await tools.waitForEmail({ subjectContains: "never", timeoutSeconds: 0.05 }, { pollMs: 10 });
     expect(res).toEqual({ timedOut: true });
+  });
+});
+
+describe("forge tools", () => {
+  function managerWith(client: Record<string, unknown>): ClaimManager {
+    return { client: () => client } as never;
+  }
+
+  it("forge_commit delegates to the client with service defaulting to github", async () => {
+    const forgeCommit = vi.fn(async () => ({ sha: "c1", url: "u" }));
+    const tools = makeTools(managerWith({ forgeCommit }));
+    const result = await tools.forgeCommit({
+      owner: "o", repo: "r", branch: "b", message: "m",
+      files: [{ path: "f", content: "x" }],
+    });
+    expect(result).toEqual({ sha: "c1", url: "u" });
+    expect(forgeCommit).toHaveBeenCalledWith("github", { owner: "o", name: "r" },
+      { branch: "b", message: "m", files: [{ path: "f", content: "x" }] });
+  });
+
+  it("forge tools return proxy errors as clean results", async () => {
+    const forgeCommit = vi.fn(async () => {
+      throw new Error('API 403: {"error":"missing_capability","remediation":"ask the operator"}');
+    });
+    const tools = makeTools(managerWith({ forgeCommit }));
+    const result = await tools.forgeCommit({
+      owner: "o", repo: "r", branch: "b", message: "m",
+      files: [{ path: "f", content: "x" }],
+    });
+    expect(result).toEqual({
+      error: 'API 403: {"error":"missing_capability","remediation":"ask the operator"}',
+    });
+  });
+
+  it("forge_open_pr and forge_comment delegate with explicit service", async () => {
+    const forgeOpenPr = vi.fn(async () => ({ number: 2, url: "u" }));
+    const forgeComment = vi.fn(async () => ({ id: 4, url: "u" }));
+    const tools = makeTools(managerWith({ forgeOpenPr, forgeComment }));
+    await tools.forgeOpenPr({
+      service: "gitlab", owner: "o", repo: "r",
+      head: "h", base: "b", title: "t", body: "d",
+    });
+    await tools.forgeComment({ owner: "o", repo: "r", issue: 4, body: "hi" });
+    expect(forgeOpenPr).toHaveBeenCalledWith("gitlab", { owner: "o", name: "r" },
+      { head: "h", base: "b", title: "t", body: "d" });
+    expect(forgeComment).toHaveBeenCalledWith("github", { owner: "o", name: "r" }, 4, "hi");
+  });
+
+  it("forge_provision defaults to gitlab", async () => {
+    const forgeProvision = vi.fn(async () => ({ username: "agent-1", email: "1@d" }));
+    const tools = makeTools(managerWith({ forgeProvision }));
+    const r = await tools.forgeProvision({});
+    expect(r).toEqual({ username: "agent-1", email: "1@d" });
+    expect(forgeProvision).toHaveBeenCalledWith("gitlab");
   });
 });
