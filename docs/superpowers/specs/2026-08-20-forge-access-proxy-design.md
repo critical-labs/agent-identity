@@ -57,7 +57,7 @@ Request flow:
 agent ── signed request ──▶ API GW ──▶ proxy Lambda
   signatureAuth (verify, replay-reject, load agent record)
   capability check: service name ∈ agent.capabilities, else 403
-  policy stub: evaluate(agent, service, op) → allow   (allow-all in MVP)
+  policy stub: evaluate(agent, op) → allow   (allow-all in MVP; op carries service)
   adapter registry: service → Forge adapter, else 404
   adapter call with credential from CredentialStore
   audit log line → CloudWatch
@@ -187,9 +187,9 @@ belongs to #23 and is not built here.
 
 ## Policy seam
 
-`policy.evaluate(agent, service, op)` is called on every request and
-returns allow in MVP. `op` is the parsed, typed operation — exactly what
-#23's deterministic rules need. The forced author and the absence of
+`policy.evaluate(agent, op)` is called on every request and returns allow
+in MVP. `op` is the parsed, typed operation (service, kind, owner, repo) —
+exactly what #23's deterministic rules need. The forced author and the absence of
 force-push are properties of the surface, not policy rules; they hold even
 with allow-all.
 
