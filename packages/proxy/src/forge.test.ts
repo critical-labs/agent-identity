@@ -4,6 +4,7 @@ import { ForgeError, statusFor } from "./forge.js";
 describe("ForgeError", () => {
   it("maps each kind to its HTTP status", () => {
     expect(statusFor("not_found")).toBe(404);
+    expect(statusFor("forbidden")).toBe(403);
     expect(statusFor("non_fast_forward")).toBe(409);
     expect(statusFor("rate_limited")).toBe(429);
     expect(statusFor("upstream_auth")).toBe(502);

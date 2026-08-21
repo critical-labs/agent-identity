@@ -80,17 +80,20 @@ describe("proxy gating", () => {
     expect(res.status).toBe(401);
   });
 
-  it("404s an unknown service", async () => {
-    const { deps } = makeDeps();
+  it("404s an unknown service and audits the rejection", async () => {
+    const { deps, audit } = makeDeps();
     const app = createProxyApp(deps);
     const path = "/forge/gitlab/repo/o/r";
     const res = await app.request(path, signed("GET", path));
     expect(res.status).toBe(404);
     expect(await res.json()).toEqual({ error: "unknown_service" });
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "482913", service: "gitlab", outcome: "rejected", reason: "unknown_service",
+    }));
   });
 
-  it("403s a capability the agent lacks, with remediation text", async () => {
-    const { deps } = makeDeps({ agentOverride: { capabilities: [] } });
+  it("403s a capability the agent lacks, with remediation text, and audits it", async () => {
+    const { deps, audit } = makeDeps({ agentOverride: { capabilities: [] } });
     const app = createProxyApp(deps);
     const path = "/forge/github/repo/o/r";
     const res = await app.request(path, signed("GET", path));
@@ -98,6 +101,9 @@ describe("proxy gating", () => {
     const body = await res.json();
     expect(body.error).toBe("missing_capability");
     expect(body.remediation).toContain("mailctl agent tag 482913 github");
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "482913", service: "github", outcome: "rejected", reason: "missing_capability",
+    }));
   });
 
   it("passes the actor to the adapter on reads", async () => {

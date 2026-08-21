@@ -92,13 +92,5 @@ export function makeTools(manager: ClaimManager) {
         return { error: (err as Error).message };
       }
     },
-
-    async forgeProvision(args: { service?: string }) {
-      try {
-        return await manager.client().forgeProvision(args.service ?? "gitlab");
-      } catch (err) {
-        return { error: (err as Error).message };
-      }
-    },
   };
 }

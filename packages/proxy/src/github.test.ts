@@ -61,6 +61,17 @@ describe("GithubForge.getRepo", () => {
     await expect(forge.getRepo({ owner: "o", name: "r" }, actor))
       .rejects.toMatchObject({ kind: "rate_limited" });
   });
+
+  it("maps a non-rate-limit 403 to forbidden (not invalid)", async () => {
+    const { fn } = makeFetch({
+      [`GET ${B}`]: {
+        status: 403, json: { message: "Resource not accessible by personal access token" },
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.getRepo({ owner: "o", name: "r" }, actor))
+      .rejects.toMatchObject({ kind: "forbidden" });
+  });
 });
 
 describe("GithubForge.createCommit", () => {

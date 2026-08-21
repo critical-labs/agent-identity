@@ -41,6 +41,10 @@ export class GithubForge implements Forge {
     if (res.status === 404) return new ForgeError("not_found", "not found on github", 404);
     if (res.status === 429 || (res.status === 403 && res.headers.get("x-ratelimit-remaining") === "0"))
       return new ForgeError("rate_limited", "github rate limit exhausted", res.status);
+    // A non-rate-limit 403 is a permission problem (missing scope / no repo
+    // access), not a malformed request — keep it distinct from `invalid`.
+    if (res.status === 403)
+      return new ForgeError("forbidden", "github forbade the operation for this credential", 403);
     if (res.status === 422 && /fast forward/i.test(text))
       return new ForgeError("non_fast_forward", "ref update is not a fast forward", 422);
     return new ForgeError("invalid", `github ${res.status}: ${text.slice(0, 200)}`, res.status);
@@ -66,6 +70,9 @@ export class GithubForge implements Forge {
         path: f.path, mode: "100644", type: "blob", content: f.content,
       })),
     });
+    // Only `author` is set to the acting identity; `committer` is
+    // intentionally left to GitHub's default (the PAT account) — that split
+    // is the attribution model, not an oversight.
     const commit = await this.gh<{ sha: string; html_url: string }>(
       "POST", `${r}/git/commits`, actor.name, {
         message: spec.message, tree: tree.sha, parents: [head.object.sha],

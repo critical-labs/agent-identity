@@ -46,15 +46,11 @@ these commands to the human rather than editing config by hand.
 
 ## Forge operations (via the access proxy)
 
-If this deployment runs the forge proxy and your identity has the service
-capability (`github` or `gitlab`), five more tools work: `forge_repo`
-(default branch + head sha), `forge_commit` (create a commit — authorship
-is set server-side to YOUR identity; you cannot and need not supply an
-author), `forge_open_pr`, `forge_comment` (both append an attribution
-footer naming your identity), and `forge_provision`. `service` defaults
-to `"github"` (`forge_provision` defaults to `"gitlab"`). A
-`missing_capability` error means this identity is not onboarded — relay
-the remediation text to the human. A `not_provisioned` error on gitlab
-means: call `forge_provision`, then `wait_for_email` for the GitLab
-confirmation mail and follow its link. Force-push and branch deletion do
-not exist in this surface.
+If this deployment runs the forge proxy and your identity has the `github`
+capability, four tools work: `forge_repo` (default branch + head sha),
+`forge_commit` (create a commit — authorship is set server-side to YOUR
+identity; you cannot and need not supply an author), `forge_open_pr`, and
+`forge_comment` (both append an attribution footer naming your identity).
+`service` defaults to `"github"`. A `missing_capability` error means this
+identity is not onboarded — relay the remediation text to the human.
+Force-push and branch deletion do not exist in this surface.

@@ -96,14 +96,4 @@ describe("forge methods", () => {
     });
   });
 
-  it("forgeProvision posts to the provision path", async () => {
-    const fetchMock = makeFetch({ username: "agent-482913", email: "482913@d" });
-    const client = new AgentIdentityClient({
-      apiUrl: "https://api.example", keypair: kp, fetch: fetchMock as never,
-    });
-    const r = await client.forgeProvision("gitlab");
-    expect(r).toEqual({ username: "agent-482913", email: "482913@d" });
-    const [url] = fetchMock.mock.calls[0] as unknown as [string];
-    expect(url).toBe("https://api.example/forge/gitlab/provision");
-  });
 });

@@ -1,6 +1,5 @@
 import type {
-  CommentResult, CommitResult, CommitSpec, PrResult, PrSpec, ForgeProvisionResult,
-  RepoInfo, RepoRef,
+  CommentResult, CommitResult, CommitSpec, PrResult, PrSpec, RepoInfo, RepoRef,
 } from "@agent-identity/shared";
 
 /** The acting identity: name is the agentId, email its mailbox address.
@@ -11,11 +10,12 @@ export interface Author {
 }
 
 export type ForgeErrorKind =
-  | "not_found" | "non_fast_forward" | "rate_limited" | "upstream_auth"
-  | "invalid" | "not_provisioned";
+  | "not_found" | "forbidden" | "non_fast_forward" | "rate_limited"
+  | "upstream_auth" | "invalid" | "not_provisioned";
 
 const STATUS: Record<ForgeErrorKind, number> = {
   not_found: 404,
+  forbidden: 403,
   non_fast_forward: 409,
   rate_limited: 429,
   upstream_auth: 502,
@@ -50,8 +50,4 @@ export interface CredentialStore {
   /** Per-identity parameter first, shared fallback; throws
    *  ForgeError("not_provisioned") when neither exists. */
   resolve(service: string, agentId: string): Promise<string>;
-}
-
-export interface Provisioner {
-  provision(actor: Author): Promise<ForgeProvisionResult>;
 }

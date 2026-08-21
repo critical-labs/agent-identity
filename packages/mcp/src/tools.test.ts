@@ -103,12 +103,4 @@ describe("forge tools", () => {
       { head: "h", base: "b", title: "t", body: "d" });
     expect(forgeComment).toHaveBeenCalledWith("github", { owner: "o", name: "r" }, 4, "hi");
   });
-
-  it("forge_provision defaults to gitlab", async () => {
-    const forgeProvision = vi.fn(async () => ({ username: "agent-1", email: "1@d" }));
-    const tools = makeTools(managerWith({ forgeProvision }));
-    const r = await tools.forgeProvision({});
-    expect(r).toEqual({ username: "agent-1", email: "1@d" });
-    expect(forgeProvision).toHaveBeenCalledWith("gitlab");
-  });
 });

@@ -4,7 +4,7 @@ import {
 } from "@agent-identity/client";
 import {
   generateKeypair, type AgentIdentity, type CommentResult, type CommitResult,
-  type CommitSpec, type EmailFull, type EmailSummary, type ForgeProvisionResult,
+  type CommitSpec, type EmailFull, type EmailSummary,
   type Keypair, type PrResult, type PrSpec, type RepoInfo, type RepoRef,
 } from "@agent-identity/shared";
 
@@ -18,7 +18,6 @@ export interface AgentClientLike {
   forgeCommit(service: string, ref: RepoRef, spec: CommitSpec): Promise<CommitResult>;
   forgeOpenPr(service: string, ref: RepoRef, spec: PrSpec): Promise<PrResult>;
   forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult>;
-  forgeProvision(service: string): Promise<ForgeProvisionResult>;
 }
 
 export interface ClaimManagerOptions {

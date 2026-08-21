@@ -135,14 +135,5 @@ server.registerTool(
   async (args) => json(await tools.forgeComment(args)),
 );
 
-server.registerTool(
-  "forge_provision",
-  {
-    description: "Provision this session's identity on a forge that supports it (default gitlab): creates a service account whose email is this identity's mailbox, then watch for the confirmation email with wait_for_email.",
-    inputSchema: { service: z.string().optional() },
-  },
-  async (args) => json(await tools.forgeProvision(args)),
-);
-
 const transport = new StdioServerTransport();
 await server.connect(transport);

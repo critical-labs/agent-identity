@@ -4,7 +4,7 @@ import {
 import type { Context } from "hono";
 import { Hono } from "hono";
 import {
-  ForgeError, statusFor, type Author, type Forge, type Provisioner,
+  ForgeError, statusFor, type Author, type Forge,
 } from "./forge.js";
 import { evaluate, type ForgeOp } from "./policy.js";
 
@@ -12,7 +12,6 @@ export interface ProxyDeps {
   agents: AgentsRepo;
   nonces: NoncesRepo;
   forges: Record<string, Forge>;
-  provisioners?: Record<string, Provisioner>;
   audit?: (line: Record<string, unknown>) => void;
 }
 
@@ -29,12 +28,15 @@ export function createProxyApp(deps: ProxyDeps): Hono {
   app.use("*", signatureAuth(deps.agents, deps.nonces));
 
   const guard = (c: Context): Guarded | Response => {
-    const service = c.req.param("service");
-    if (!service) return c.json({ error: "unknown_service" }, 404);
-    const forge = deps.forges[service];
-    if (!forge) return c.json({ error: "unknown_service" }, 404);
     const agent = c.get("agent") as AgentRecord;
+    const service = c.req.param("service");
+    const forge = service ? deps.forges[service] : undefined;
+    if (!service || !forge) {
+      audit({ agentId: agent.agentId, service: service ?? "-", outcome: "rejected", reason: "unknown_service" });
+      return c.json({ error: "unknown_service" }, 404);
+    }
     if (!(agent.capabilities ?? []).includes(service)) {
+      audit({ agentId: agent.agentId, service, outcome: "rejected", reason: "missing_capability" });
       return c.json({
         error: "missing_capability",
         remediation: `ask the operator to run: mailctl agent tag ${agent.agentId} ${service}`,
@@ -46,13 +48,16 @@ export function createProxyApp(deps: ProxyDeps): Hono {
   const run = async <T>(
     c: Context, g: Guarded, op: ForgeOp, call: () => Promise<T>,
   ): Promise<Response> => {
-    const decision = evaluate(g.agent, op);
-    if (!decision.allow) return c.json({ error: "denied", reason: decision.reason }, 403);
-    const started = Date.now();
     const base = {
       agentId: g.agent.agentId, service: op.service, op: op.kind,
       owner: op.owner, repo: op.repo,
     };
+    const decision = evaluate(g.agent, op);
+    if (!decision.allow) {
+      audit({ ...base, outcome: "denied", reason: decision.reason });
+      return c.json({ error: "denied", reason: decision.reason }, 403);
+    }
+    const started = Date.now();
     try {
       const result = await call();
       audit({ ...base, outcome: "ok", latencyMs: Date.now() - started });
@@ -66,6 +71,8 @@ export function createProxyApp(deps: ProxyDeps): Hono {
         const label = err.kind === "upstream_auth" ? "upstream_credential_invalid" : err.kind;
         return c.json({ error: label, detail: err.message }, statusFor(err.kind) as never);
       }
+      // Never silently swallow an unexpected failure in a credential proxy.
+      audit({ ...base, outcome: "unexpected", latencyMs: Date.now() - started });
       throw err;
     }
   };

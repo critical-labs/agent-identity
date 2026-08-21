@@ -1,7 +1,7 @@
 import {
   canonicalString, sign, type AgentIdentity, type CommentResult, type CommitResult,
   type CommitSpec, type EmailFull, type EmailSummary, type Keypair, type PrResult,
-  type PrSpec, type ForgeProvisionResult, type RepoInfo, type RepoRef,
+  type PrSpec, type RepoInfo, type RepoRef,
 } from "@agent-identity/shared";
 
 export interface ClientOptions {
@@ -80,9 +80,5 @@ export class AgentIdentityClient {
   forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult> {
     return this.request("POST", `/forge/${service}/comment`,
       JSON.stringify({ owner: ref.owner, repo: ref.name, issue, body }));
-  }
-
-  forgeProvision(service: string): Promise<ForgeProvisionResult> {
-    return this.request("POST", `/forge/${service}/provision`);
   }
 }
