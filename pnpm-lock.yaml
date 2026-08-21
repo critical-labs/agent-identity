@@ -4,9 +4,6 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
-overrides:
-  '@aws-sdk/client-ssm': 3.1079.0
-
 importers:
 
   .:

@@ -3,5 +3,3 @@ packages:
   - "infra"
 allowBuilds:
   esbuild: true
-overrides:
-  "@aws-sdk/client-ssm": "3.1079.0"
