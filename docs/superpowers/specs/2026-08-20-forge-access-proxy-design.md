@@ -69,32 +69,36 @@ specific forge. Two ports face outward —
 
 ```ts
 interface Forge {
-  getRepo(ref: RepoRef): Promise<RepoInfo>;              // default branch, head sha
-  createCommit(ref: RepoRef, spec: CommitSpec, author: Author): Promise<CommitResult>;
-  openPullRequest(ref: RepoRef, spec: PrSpec): Promise<PrResult>;
-  comment(ref: RepoRef, issue: number, body: string): Promise<CommentResult>;
+  getRepo(ref: RepoRef, actor: Author): Promise<RepoInfo>;   // default branch, head sha
+  createCommit(ref: RepoRef, spec: CommitSpec, actor: Author): Promise<CommitResult>;
+  openPullRequest(ref: RepoRef, spec: PrSpec, actor: Author): Promise<PrResult>;
+  comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult>;
 }
 
 interface CredentialStore {
-  forService(service: string): Promise<string>;          // opaque token
+  resolve(service: string, agentId: string): Promise<string>;  // per-identity first, shared fallback
 }
 ```
 
 Domain types are forge-neutral: `RepoRef { owner, name }`, `CommitSpec
 { branch, message, files: [{ path, content }] }`, `PrSpec { head, base,
-title, body }`. `Author { name, email }` is constructed by the core from
-the authenticated agent record (`agentId`, mailbox address) and passed to
-the adapter; no request field and no adapter accepts caller-supplied
-authorship. Adapters translate intent into their forge's API and map
+title, body }`. Every operation executes *as* an identity: `Author
+{ name, email }` is constructed by the core from the authenticated agent
+record (`agentId`, mailbox address) and passed to every adapter call as
+the actor; no request field and no adapter accepts caller-supplied
+authorship. GitHub uses the actor for commit authorship over the shared
+PAT; GitLab additionally uses `actor.name` (the agentId) to resolve that
+identity's own service-account PAT, so the acting user and the author are
+the agent natively. Adapters translate intent into their forge's API and map
 failures into a normalized error taxonomy owned by the core: `NotFound`,
 `NonFastForward`, `RateLimited`, `UpstreamAuthFailed`, `Invalid`.
 
-MVP registers exactly one adapter, `github`, plus an in-memory `FakeForge`
-used by tests — two implementations of the port from day one, the cheapest
-proof the abstraction is not GitHub-shaped in disguise. Real GitLab and
-Gitea/Forgejo adapters are out of scope; both have single-call
-create-commit-with-files APIs, which is why the port is defined at intent
-level rather than around GitHub's blob/tree/commit mechanics.
+Two real adapters ship: `github` (shared PAT) and `gitlab` (per-identity
+service accounts — see the GitLab section), plus an in-memory `FakeForge`
+used by tests. Delivery is sequenced as two PRs: proxy + GitHub adapter
+first, GitLab adapter + provisioning second. Gitea/Forgejo remains a
+future adapter; its single-call contents API fits the same intent-level
+port.
 
 ## HTTP surface
 
@@ -124,16 +128,55 @@ no upstream detail leaked.
 
 ## Credentials
 
-One fine-grained PAT for the `github` service, minted by the operator on
-the backing account (`critical-agent-zero`) and restricted to the repos
-agents may touch — the outer blast-radius boundary while policy is
-allow-all. Stored at SSM SecureString `/agent-identity/forge/github/pat`;
-the CDK stack grants read+decrypt to the proxy Lambda only and the
-parameter value is set out-of-band by the operator (`aws ssm put-parameter
---type SecureString ...`, echoed in the deploy job summary). The Lambda
-caches the value in memory for 5 minutes. The credential path pattern is
-per-service; per-identity credentials (e.g. individual Codeberg accounts)
-are a future extension behind `CredentialStore` and change no handler.
+Resolution is per-identity first, shared fallback:
+`/agent-identity/forge/<service>/pat/<agentId>` then
+`/agent-identity/forge/<service>/pat`, both SSM SecureString, cached in
+memory for 5 minutes. The CDK stack grants read+decrypt to the proxy
+Lambda only.
+
+**GitHub** uses the shared path: one fine-grained PAT minted by the
+operator on the backing account (`critical-agent-zero`), restricted to
+the repos agents may touch — the outer blast-radius boundary while policy
+is allow-all. Set out-of-band (`aws ssm put-parameter --type SecureString
+...`, echoed in the deploy job summary).
+
+**GitLab** is per-identity only — there is no shared GitLab PAT, and an
+unprovisioned identity gets a clear `not_provisioned` error naming the
+provision step.
+
+## GitLab service accounts (per-identity)
+
+GitLab's API sanctions bot accounts: a top-level group Owner token can
+create *service accounts* (`POST /groups/:id/service_accounts`) with a
+custom email and mint PATs for them
+(`POST /groups/:id/service_accounts/:user_id/personal_access_tokens`).
+This closes the onboarding loop GitHub blocks: the service account's
+email is **the agent's own mailbox address**, so the confirmation email
+arrives via the agent's existing mail tools and the agent confirms
+itself. Free tier allows 100 service accounts per top-level group.
+
+`POST /forge/gitlab/provision` (signature-authed, `gitlab`-capability-
+gated, idempotent) provisions the calling identity: find-or-create the
+service account (`username: agent-<agentId>`, `name: agent <agentId>`,
+`email: <address>`), add it to the group as Developer, mint a PAT
+(`scopes: ["api"]`, 365-day expiry), and store it at the identity's SSM
+path. Returns `{ username, email }`. Operator config in SSM:
+`/agent-identity/forge/gitlab/admin-token` (group Owner token — the
+proxy's most sensitive credential) and `/agent-identity/forge/gitlab/group`
+(top-level group id). The proxy Lambda gets `ssm:PutParameter` on the
+`/agent-identity/forge/gitlab/pat/*` prefix only. PAT rotation before the
+365-day expiry is out of scope (re-provisioning mints a fresh one).
+
+The `GitlabForge` adapter implements the same port: repo info via
+`GET /projects/:path` + branch head; commit via the single-call commits
+API (`actions[]` with per-file create/update chosen by a file-existence
+probe, `author_name`/`author_email` forced from the actor); MR via
+`POST /projects/:path/merge_requests` (`PrResult.number` is the MR iid);
+comment maps to **issue** notes (GitLab separates issue and MR
+discussions; MR notes are out of scope — a documented asymmetry with
+GitHub, where one endpoint covers both). A matching `forge_provision` MCP
+tool lets a session self-onboard: provision → `wait_for_email` → confirm
+via the extracted link.
 
 ## Audit
 
@@ -187,7 +230,7 @@ cdk synth. A real-PAT end-to-end run is a manual script, not CI.
 ## Out of scope
 
 Git-protocol push/fetch, PR merge/review/close operations, file deletion
-or renames in commits (`files` entries create or update only), multiple or
-per-identity credentials, explicit binding records, #23 policy rules
-beyond the seam, GitLab/Gitea adapters, DynamoDB audit trail, rate
-limiting, non-forge services.
+or renames in commits (`files` entries create or update only), explicit
+binding records, #23 policy rules beyond the seam, Gitea/Forgejo
+adapters, GitLab MR-note comments, GitLab PAT rotation before expiry,
+DynamoDB audit trail, rate limiting, non-forge services.
