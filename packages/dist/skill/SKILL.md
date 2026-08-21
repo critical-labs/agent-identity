@@ -43,3 +43,14 @@ a joint task:
 `.mcp.json`). `npx agent-identity pool provision --count N` mints more
 identities; `npx agent-identity pool status` shows availability. Suggest
 these commands to the human rather than editing config by hand.
+
+## Forge operations (via the access proxy)
+
+If this deployment runs the forge proxy and your identity has the `github`
+capability, four tools work: `forge_repo` (default branch + head sha),
+`forge_commit` (create a commit — authorship is set server-side to YOUR
+identity; you cannot and need not supply an author), `forge_open_pr`, and
+`forge_comment` (both append an attribution footer naming your identity).
+`service` defaults to `"github"`. A `missing_capability` error means this
+identity is not onboarded — relay the remediation text to the human.
+Force-push and branch deletion do not exist in this surface.

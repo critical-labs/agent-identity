@@ -1,0 +1,14 @@
+{
+  "name": "@agent-identity/proxy",
+  "version": "0.1.0",
+  "type": "module",
+  "exports": { ".": "./src/app.ts" },
+  "dependencies": {
+    "@agent-identity/api": "workspace:*",
+    "@agent-identity/shared": "workspace:*",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/client-ssm": "3.1079.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "hono": "^4.5.0"
+  }
+}

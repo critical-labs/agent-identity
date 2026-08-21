@@ -162,6 +162,27 @@ importers:
         specifier: ^3.23.0
         version: 3.25.76
 
+  packages/proxy:
+    dependencies:
+      '@agent-identity/api':
+        specifier: workspace:*
+        version: link:../api
+      '@agent-identity/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@aws-sdk/client-dynamodb':
+        specifier: ^3.600.0
+        version: 3.1079.0
+      '@aws-sdk/client-ssm':
+        specifier: 3.1079.0
+        version: 3.1079.0
+      '@aws-sdk/lib-dynamodb':
+        specifier: ^3.600.0
+        version: 3.1079.0(@aws-sdk/client-dynamodb@3.1079.0)
+      hono:
+        specifier: ^4.5.0
+        version: 4.12.27
+
   packages/shared: {}
 
 packages:
@@ -189,6 +210,10 @@ packages:
 
   '@aws-sdk/client-s3@3.1079.0':
     resolution: {integrity: sha512-di9U/7Po7qlVYb2dq58ULsbBAE1pBIk53rux+50LQCvH1X+/l1Ys+BIk/QLBtdaK1nADk0xRNEBbA1QWVnMccw==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-ssm@3.1079.0':
+    resolution: {integrity: sha512-5Xwx0E3HmkhynUuXIEa3yL/jVkhm0tRgJloStDggUqPm5kIG/d16Wt4JGEP0ZnLVJ4tT+BdKA7Q3Q9EetDzr/Q==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.974.27':
@@ -2027,6 +2052,17 @@ snapshots:
       '@aws-sdk/credential-provider-node': 3.972.62
       '@aws-sdk/middleware-sdk-s3': 3.972.58
       '@aws-sdk/signature-v4-multi-region': 3.996.38
+      '@aws-sdk/types': 3.973.15
+      '@smithy/core': 3.29.1
+      '@smithy/fetch-http-handler': 5.6.3
+      '@smithy/node-http-handler': 4.9.3
+      '@smithy/types': 4.15.1
+      tslib: 2.8.1
+
+  '@aws-sdk/client-ssm@3.1079.0':
+    dependencies:
+      '@aws-sdk/core': 3.974.27
+      '@aws-sdk/credential-provider-node': 3.972.62
       '@aws-sdk/types': 3.973.15
       '@smithy/core': 3.29.1
       '@smithy/fetch-http-handler': 5.6.3

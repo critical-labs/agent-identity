@@ -2,14 +2,22 @@ import {
   AgentIdentityClient, claimFromPool, hasCapabilities, poolStatus,
   savePoolProfile, type Claim, type PoolProfile, type PoolStatus,
 } from "@agent-identity/client";
-import { generateKeypair, type AgentIdentity, type Keypair } from "@agent-identity/shared";
+import {
+  generateKeypair, type AgentIdentity, type CommentResult, type CommitResult,
+  type CommitSpec, type EmailFull, type EmailSummary,
+  type Keypair, type PrResult, type PrSpec, type RepoInfo, type RepoRef,
+} from "@agent-identity/shared";
 
 export class NoIdentityError extends Error {}
 
 export interface AgentClientLike {
   register(): Promise<AgentIdentity>;
-  listEmails(opts: { since?: string; limit?: number }): Promise<{ emails: import("@agent-identity/shared").EmailSummary[] }>;
-  getEmail(id: string): Promise<import("@agent-identity/shared").EmailFull>;
+  listEmails(opts: { since?: string; limit?: number }): Promise<{ emails: EmailSummary[] }>;
+  getEmail(id: string): Promise<EmailFull>;
+  forgeRepo(service: string, ref: RepoRef): Promise<RepoInfo>;
+  forgeCommit(service: string, ref: RepoRef, spec: CommitSpec): Promise<CommitResult>;
+  forgeOpenPr(service: string, ref: RepoRef, spec: PrSpec): Promise<PrResult>;
+  forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult>;
 }
 
 export interface ClaimManagerOptions {

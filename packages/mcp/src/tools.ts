@@ -46,5 +46,51 @@ export function makeTools(manager: ClaimManager) {
         await sleep(Math.min(pollMs, Math.max(0, deadline - Date.now())));
       }
     },
+
+    async forgeRepo(args: { service?: string; owner: string; repo: string }) {
+      try {
+        return await manager.client().forgeRepo(args.service ?? "github",
+          { owner: args.owner, name: args.repo });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
+    async forgeCommit(args: {
+      service?: string; owner: string; repo: string; branch: string;
+      message: string; files: { path: string; content: string }[];
+    }) {
+      try {
+        return await manager.client().forgeCommit(args.service ?? "github",
+          { owner: args.owner, name: args.repo },
+          { branch: args.branch, message: args.message, files: args.files });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
+    async forgeOpenPr(args: {
+      service?: string; owner: string; repo: string;
+      head: string; base: string; title: string; body: string;
+    }) {
+      try {
+        return await manager.client().forgeOpenPr(args.service ?? "github",
+          { owner: args.owner, name: args.repo },
+          { head: args.head, base: args.base, title: args.title, body: args.body });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
+    async forgeComment(args: {
+      service?: string; owner: string; repo: string; issue: number; body: string;
+    }) {
+      try {
+        return await manager.client().forgeComment(args.service ?? "github",
+          { owner: args.owner, name: args.repo }, args.issue, args.body);
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
   };
 }
