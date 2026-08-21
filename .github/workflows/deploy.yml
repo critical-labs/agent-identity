@@ -100,4 +100,6 @@ jobs:
           1. Publish the MX record above in your DNS provider.
           2. If not already done, verify the SES domain identity and add its DKIM records: \`aws sesv2 create-email-identity --email-identity $MAIL_DOMAIN\`
           3. Mint a fleet key: \`AGENT_IDENTITY_TABLE=$TABLE_NAME npx tsx packages/admin/src/mailctl.ts fleet-key create --label <label>\`
+          4. Store the shared GitHub PAT (proxy): \`aws ssm put-parameter --name /agent-identity/forge/github/pat --type SecureString --value <fine-grained-PAT>\`
+          5. For GitLab provisioning: \`aws ssm put-parameter --name /agent-identity/forge/gitlab/admin-token --type SecureString --value <group-owner-token>\` and \`aws ssm put-parameter --name /agent-identity/forge/gitlab/group --type String --value <top-level-group-id>\`
           EOF
