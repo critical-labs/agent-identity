@@ -181,3 +181,47 @@ describe("POST /forge/:service/commit", () => {
     }));
   });
 });
+
+describe("POST /forge/:service/pr and /comment", () => {
+  it("opens a PR with an attribution footer appended", async () => {
+    const path = "/forge/github/pr";
+    const body = JSON.stringify({
+      owner: "o", repo: "r", head: "feat/x", base: "main",
+      title: "feat: x", body: "does x",
+    });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ number: 7, url: "https://forge/pr/7" });
+    const [name, , spec] = forge.calls[0]!;
+    expect(name).toBe("openPullRequest");
+    expect((spec as { body: string }).body).toBe(
+      "does x\n\n_opened by agent 482913 via agent-identity proxy_",
+    );
+  });
+
+  it("comments with an attribution footer appended", async () => {
+    const path = "/forge/github/comment";
+    const body = JSON.stringify({ owner: "o", repo: "r", issue: 12, body: "note" });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: 9, url: "https://forge/c/9" });
+    expect(forge.calls[0]).toEqual([
+      "comment", { owner: "o", name: "r" }, 12,
+      "note\n\n_comment by agent 482913 via agent-identity proxy_",
+      { name: "482913", email: "482913@agents.example" },
+    ]);
+  });
+
+  it("400s a comment with a non-numeric issue", async () => {
+    const path = "/forge/github/comment";
+    const body = JSON.stringify({ owner: "o", repo: "r", issue: "twelve", body: "note" });
+    const { deps } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(400);
+  });
+});
