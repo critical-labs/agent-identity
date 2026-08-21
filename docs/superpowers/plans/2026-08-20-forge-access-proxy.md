@@ -1759,6 +1759,18 @@ Expected: PR CI (test job) green.
 
 Branch from updated main after PR 1 merges: `git checkout main && git pull --ff-only origin main && git checkout -b feat/forge-gitlab`.
 
+> **Note (post-PR1 review):** the provisioning *consumer* surface that the
+> Phase 1 task text placed in Tasks 1/3/5/11/12/13 — `ForgeProvisionResult`
+> (shared), the `Provisioner` interface (forge.ts), the `provisioners?`
+> field on `ProxyDeps` (app.ts), the `"provision"` member of `ForgeOp.kind`
+> (policy.ts), `client.forgeProvision`, the `forge_provision` MCP tool, and
+> the SKILL provision paragraph — was **removed from PR1** so PR1 ships no
+> tool that lacks a working backend. Phase 2 therefore RE-INTRODUCES those
+> alongside the route and adapter below; add them as the first steps here
+> (they are small and already specified verbatim in the Phase 1 task text).
+> Also note PR1 added a `forbidden` → 403 `ForgeErrorKind`; the GitLab
+> adapter should map a 403 to it too.
+
 ### Task 15: GitLab adapter
 
 **Files:**
