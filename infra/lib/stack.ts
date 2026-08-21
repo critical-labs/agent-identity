@@ -1,9 +1,10 @@
 import {
   CfnOutput, Duration, RemovalPolicy, Stack, type StackProps,
 } from "aws-cdk-lib";
-import { HttpApi } from "aws-cdk-lib/aws-apigatewayv2";
+import { HttpApi, HttpMethod } from "aws-cdk-lib/aws-apigatewayv2";
 import { HttpLambdaIntegration } from "aws-cdk-lib/aws-apigatewayv2-integrations";
 import { AttributeType, BillingMode, Table } from "aws-cdk-lib/aws-dynamodb";
+import { PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { Runtime } from "aws-cdk-lib/aws-lambda";
 import { NodejsFunction, OutputFormat } from "aws-cdk-lib/aws-lambda-nodejs";
 import { Bucket } from "aws-cdk-lib/aws-s3";
@@ -75,6 +76,21 @@ export class AgentIdentityStack extends Stack {
 
     const httpApi = new HttpApi(this, "HttpApi", {
       defaultIntegration: new HttpLambdaIntegration("ApiInt", apiFn),
+    });
+
+    const proxyFn = new NodejsFunction(this, "Proxy", {
+      ...fnDefaults,
+      entry: pkg("proxy/src/lambda.ts"),
+    });
+    table.grantReadWriteData(proxyFn);
+    proxyFn.addToRolePolicy(new PolicyStatement({
+      actions: ["ssm:GetParameter"],
+      resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/agent-identity/forge/*`],
+    }));
+    httpApi.addRoutes({
+      path: "/forge/{proxy+}",
+      methods: [HttpMethod.ANY],
+      integration: new HttpLambdaIntegration("ProxyInt", proxyFn),
     });
 
     const rules = new ReceiptRuleSet(this, "Rules", {
