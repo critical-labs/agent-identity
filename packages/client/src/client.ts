@@ -1,6 +1,7 @@
 import {
-  canonicalString, sign, type AgentIdentity, type EmailFull,
-  type EmailSummary, type Keypair,
+  canonicalString, sign, type AgentIdentity, type CommentResult, type CommitResult,
+  type CommitSpec, type EmailFull, type EmailSummary, type Keypair, type PrResult,
+  type PrSpec, type ForgeProvisionResult, type RepoInfo, type RepoRef,
 } from "@agent-identity/shared";
 
 export interface ClientOptions {
@@ -60,5 +61,28 @@ export class AgentIdentityClient {
 
   getEmail(id: string): Promise<EmailFull> {
     return this.request("GET", `/emails/${id}`);
+  }
+
+  forgeRepo(service: string, ref: RepoRef): Promise<RepoInfo> {
+    return this.request("GET", `/forge/${service}/repo/${ref.owner}/${ref.name}`);
+  }
+
+  forgeCommit(service: string, ref: RepoRef, spec: CommitSpec): Promise<CommitResult> {
+    return this.request("POST", `/forge/${service}/commit`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, ...spec }));
+  }
+
+  forgeOpenPr(service: string, ref: RepoRef, spec: PrSpec): Promise<PrResult> {
+    return this.request("POST", `/forge/${service}/pr`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, ...spec }));
+  }
+
+  forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult> {
+    return this.request("POST", `/forge/${service}/comment`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, issue, body }));
+  }
+
+  forgeProvision(service: string): Promise<ForgeProvisionResult> {
+    return this.request("POST", `/forge/${service}/provision`);
   }
 }
