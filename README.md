@@ -174,6 +174,23 @@ One-time setup (run in CloudShell, or any shell with admin credentials, in your 
 
 If the deploy job fails at `configure-aws-credentials`, the usual cause is a trust-policy mismatch: the role only trusts `repo:<GitHubOrg>/<GitHubRepo>:environment:<EnvironmentName>` as configured in step 2, so the org/repo and environment name must match exactly.
 
+### Local development
+
+`pnpm dev` runs the API and the fleet dashboard on one loopback port (`8787` by default, `PORT` to change it) against a local DynamoDB. It creates the table on first start. It **refuses to start** unless `AWS_ENDPOINT_URL_DYNAMODB` (or `AWS_ENDPOINT_URL`) is set, so it can never reach a real table.
+
+1. Start [DynamoDB Local](https://docs.aws.amazon.com/amazondynamodb/latest/developerguide/DynamoDBLocal.DownloadingAndRunning.html) (Java 17+): `java -Djava.library.path=./DynamoDBLocal_lib -jar DynamoDBLocal.jar -inMemory -port 8000`
+2. In another shell, set the local environment and start the server:
+   ```bash
+   export AWS_ENDPOINT_URL_DYNAMODB=http://127.0.0.1:8000 AWS_REGION=us-east-1 \
+     AWS_ACCESS_KEY_ID=local AWS_SECRET_ACCESS_KEY=local \
+     TABLE_NAME=agent-identity-dev MAIL_DOMAIN=mail.localhost
+   pnpm dev
+   ```
+3. Mint a viewer key against the same table: `AGENT_IDENTITY_TABLE=agent-identity-dev npx tsx packages/admin/src/mailctl.ts viewer-key create --label dev`
+4. Open `http://127.0.0.1:8787/ui/?api=http://127.0.0.1:8787#key=<viewer key>`.
+
+The API reads the same variables as the Lambda (`FLEET_KEY_REQUIRED`, `PUBLIC_REPOS`, `AUTO_CAPABILITIES`, `RETENTION_DAYS`). Mail bodies large enough to have been stored in S3 show a placeholder, because there's no S3 locally.
+
 ### Releasing to npm
 
 Bump `version` in `packages/dist/package.json`, commit, then tag and push:

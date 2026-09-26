@@ -2,7 +2,7 @@
   "name": "agent-identity",
   "private": true,
   "type": "module",
-  "scripts": { "test": "vitest run" },
+  "scripts": { "test": "vitest run", "dev": "tsx packages/api/src/dev.ts" },
   "dependencies": {
     "@agent-identity/client": "workspace:*"
   },

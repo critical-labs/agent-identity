@@ -1,6 +1,7 @@
 import { App } from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { describe, expect, it } from "vitest";
+import { TABLE_KEYS } from "../../packages/shared/src/table.js";
 import { AgentIdentityStack, type AgentIdentityStackProps } from "./stack.js";
 
 // Skip Lambda asset bundling — these tests assert on synthesized resources,
@@ -10,6 +11,18 @@ const synth = (props: Partial<AgentIdentityStackProps> = {}, context: Record<str
   const stack = new AgentIdentityStack(app, "Test", { domain: "mail.example.com", ...props });
   return Template.fromStack(stack);
 };
+
+describe("table key schema", () => {
+  it("matches the shared TABLE_KEYS the local dev server creates tables from", () => {
+    synth().hasResourceProperties("AWS::DynamoDB::Table", {
+      KeySchema: [
+        { AttributeName: TABLE_KEYS.partitionKey, KeyType: "HASH" },
+        { AttributeName: TABLE_KEYS.sortKey, KeyType: "RANGE" },
+      ],
+      TimeToLiveSpecification: { AttributeName: TABLE_KEYS.ttlAttribute, Enabled: true },
+    });
+  });
+});
 
 describe("cors", () => {
   it("allows browser dashboards to call the API (GET + the read-key headers)", () => {

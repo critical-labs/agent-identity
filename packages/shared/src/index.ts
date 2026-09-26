@@ -6,3 +6,4 @@ export * from "./mailbox.js";
 export * from "./redact.js";
 export * from "./activity.js";
 export * from "./public-fleet.js";
+export * from "./table.js";
