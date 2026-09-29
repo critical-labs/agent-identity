@@ -42,7 +42,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - `QA_BASE_ORIGIN=http://127.0.0.1:3101` and `QA_PR_ORIGIN=http://127.0.0.1:3102`.
 
   App keys come from `cfg.env`:
-  - `QA_MAIL_DOMAIN` (required; the prod mail domain, so the fleet mail redaction behaves as in prod);
+  - `QA_MAIL_DOMAIN` (optional override). The panes need the prod mail domain so the fleet mail redaction behaves as in prod, and by default `snapshot.ts` derives it from the agents' addresses, so a reviewer doesn't supply it. When set, it wins over the derived domain. It must be a bare, lower-case domain name (`isMailDomain`: labels of `[a-z0-9-]`, not starting or ending in `-`, joined by at least one dot, at most 253 characters, with no scheme, port, path or `@`); otherwise the config check fails with an error that doesn't echo the value, since logs may be pasted publicly (revised 2026-09-29: it was required);
   - `QA_PUBLIC_REPOS` and `QA_AUTO_CAPABILITIES` (optional);
   - `QA_TRUSTED_LOGINS`, comma-separated, defaulting to `critical-agent-zero`;
   - `QA_BASE_REF`, defaulting to `main`;
@@ -67,8 +67,10 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - On other platforms it throws "unsupported platform: bind a host firewall rule for DynamoDB Local and set QA_ALLOW_UNFIREWALLED=1". The environment variable is the explicit override.
 - **`snapshot.ts`:** `loadSnapshot({ stackName, cfn, ddb })`.
   - It gets the table's physical name from CloudFormation (`DescribeStackResources`, logical id starting `Table`), then runs a **read-only** paginated `Scan`.
-  - It returns `{ items, dropped, droppedAttributes }`: the items after `redactItem`, held only in memory, and the drop report (see `redact.ts`). `createSnapshotLoader` hands each snapshot to an `onLoaded` callback once, which `serve.ts` uses to log `describeSnapshot`.
-  - It runs once per conductor process and is memoized: the first pane's seed triggers it, and later sessions reuse it until restart. Clients use the default credential chain, which is the reviewer's AWS profile. The region comes from `QA_AWS_REGION` when set; otherwise it comes from the default chain. The prod stack's region is the deploy workflow's `AWS_REGION` variable, and the default chain may not match it.
+  - It returns `{ items, dropped, droppedAttributes, mailDomain, mailDomainCounts }`: the items after `redactItem`, held only in memory, the drop report (see `redact.ts`), and the fleet mail domain. `createSnapshotLoader` hands each snapshot to an `onLoaded` callback once, which `serve.ts` uses to log `describeSnapshot`.
+  - **`deriveMailDomain(items)`** takes the kept agent records (`AGENT#…` + `AGENT`) and, for each `address`, the text after its last `@`, lower-cased (ASCII only) and valid by `isMailDomain`, after a non-empty local part. Invalid addresses don't count. `mailDomain` is the most common domain when it covers more than half of the agents with a valid address; with no valid address, a tie or a plurality short of a majority, it is `null`. `mailDomainCounts` holds `{ matching, addresses }`.
+  - **The domain is never logged**: logs may be pasted publicly. `describeSnapshot` ends with `mail domain: derived from N of M agent address(es)`, `not derivable (…)` with the count, or `set by QA_MAIL_DOMAIN` when the override is set.
+  - It runs once per conductor process and is memoized: the first call (normally the first pane's seed) triggers it, and `readBaseEnv` and later sessions reuse it until restart. Clients use the default credential chain, which is the reviewer's AWS profile. The region comes from `QA_AWS_REGION` when set; otherwise it comes from the default chain. The prod stack's region is the deploy workflow's `AWS_REGION` variable, and the default chain may not match it.
 - **`redact.ts`:** `redactItem(item)`, a pure function returning the item to keep or `null`. **It fails closed at both levels: item shapes, and each shape's attributes, are allowlists.** (Revised after review: the first version copied unknown item shapes and masked only ASCII digit runs, which let common code formats through; a later version still copied every attribute of the four non-mail shapes.)
   - **Item shapes, keyed on (`PK` prefix, `SK`), matching every writer in the repo** (`api/src/db/*`, `admin/src/commands.ts`):
     - `AGENT#…` + `AGENT`: an agent, keeping the `AgentRecord` fields (`agentId`, `address`, `publicKey`, `status`, `createdAt`, `capabilities`, `mailbox`, `allowlist`, `catchAll`);
@@ -107,7 +109,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - `MAIL_DOMAIN`, `PUBLIC_REPOS` and `AUTO_CAPABILITIES`: from `prodEnv`;
   - `FLEET_KEY_REQUIRED=true`.
 
-  `readBaseEnv` supplies `prodEnv` from config. The pane never sees the harness's environment, because qa-conductor's provisioner passes only `PATH` plus this map.
+  `readBaseEnv` supplies `prodEnv` from config and the snapshot's mail domain (see `adapters.ts`). `derivePaneEnv` still refuses a `prodEnv` without `MAIL_DOMAIN`. The pane never sees the harness's environment, because qa-conductor's provisioner passes only `PATH` plus this map.
 - **`auth.ts`:** `requiresDb: true`. `establishSession({ pane, db })` works like this:
   1. Mint `randomBytes(32).toString('hex')`.
   2. `PutItem` `{ PK: 'VIEWER#' + sha256hex(key), SK: 'VIEWER', label: 'qa', createdAt }` into the pane table via `localClient(db)`. This must be the same hash scheme as `AgentsRepo.verifyViewerKey`; a test asserts it round-trips through the real repo.
@@ -124,18 +126,18 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
     - `healthPath: '/ui/'` and `healthy: s => s === 200`.
 
     Its `provisionDatabase` is wrapped to run `verifyInstall` first (by default `assertInstalled` on the DynamoDB Local home), so no pane's emulator starts from a changed install. Every other provisioner method passes straight through.
-  - **seed, envTransform, auth:** from the modules above.
-  - **`readBaseEnv`:** `MAIL_DOMAIN`, `PUBLIC_REPOS` and `AUTO_CAPABILITIES` from the config.
+  - **seed, envTransform, auth:** from the modules above. The seed gets the items of the one memoized snapshot loader, which `readBaseEnv` shares.
+  - **`readBaseEnv`:** `PUBLIC_REPOS` and `AUTO_CAPABILITIES` from the config. `MAIL_DOMAIN` is `QA_MAIL_DOMAIN` when set (without waiting for a scan), else the memoized snapshot's `mailDomain`: `readBaseEnv` awaits the same loader as the seed, so it doesn't depend on the conductor seeding first, and prod is scanned once either way. When neither exists, it throws `the mail domain is not derivable (…): set QA_MAIL_DOMAIN in .env.qa and restart pnpm qa`, which fails that boot.
 - **`serve.ts`:** the `pnpm qa` entry.
-  1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install against `DDB_LOCAL_FILES`. Each failure prints how to fix it and exits non-zero.
+  1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install against `DDB_LOCAL_FILES`. Each failure prints how to fix it and exits non-zero. A missing `QA_MAIL_DOMAIN` is not a failure: the domain comes from the snapshot.
   2. Create the GitHub client with qa-conductor's `createGithub` and the configured labels.
   3. Start the conductor, and on SIGINT, SIGTERM or SIGHUP `await shutdown()`.
   4. Print the harness URL.
-  5. When the first pane's seed loads the snapshot, log one line with the kept count and the drop report (dropped items per shape, and unlisted attributes dropped from kept items).
+  5. When the first pane's seed loads the snapshot, log one line with the kept count, the drop report (dropped items per shape, and unlisted attributes dropped from kept items) and where the mail domain comes from (counts only, never the domain).
 - **`setup.ts`:** the `pnpm qa:setup` entry. Unless `checkInstall` passes, it downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache, checks every file against `DDB_LOCAL_FILES` and writes the marker. It then prints the firewall commands if the rule is missing.
 - **`qa-conductor.d.ts`:** minimal ambient module declarations for the qa-conductor specifiers used, since qa-conductor ships plain JS. This keeps the root `tsc --noEmit` green.
 - **Root scripts:** `"qa": "tsx packages/qa/src/serve.ts"` and `"qa:setup": "tsx packages/qa/src/setup.ts"`. `.env.qa` is gitignored.
-- **README:** a "Side-by-side PR QA" section covering setup (including the jar checksum), the firewall step, `.env.qa` (including `QA_AWS_REGION`), `pnpm qa`, the trust model (write access or `QA_TRUSTED_LOGINS`, and the caveat that logins can change hands), what the redaction keeps and drops, and the table-schema limitation.
+- **README:** a "Side-by-side PR QA" section covering setup (including the jar checksum), the firewall step, `.env.qa` (including `QA_AWS_REGION`, and `QA_MAIL_DOMAIN` as an optional override of the derived mail domain, which is never logged), `pnpm qa`, the trust model (write access or `QA_TRUSTED_LOGINS`, and the caveat that logins can change hands), what the redaction keeps and drops, and the table-schema limitation.
 
 ### Lockfile
 
@@ -148,6 +150,7 @@ Add dependencies with `npx pnpm@9.15.9`. The lockfile diff must contain only the
 - Installs skip scripts and pnpmfiles.
 - Panes run with only `PATH` plus their declared env, and bind to loopback. DynamoDB Local is covered by the enforced firewall rule. Its tarball is checksum-pinned, and every file it extracts is pinned in source and re-checked, with no extra file allowed, at `pnpm qa` start and before each pane's emulator starts.
 - Real AWS credentials exist only in the harness process, for one read-only Scan. The snapshot is redacted before it's written anywhere and is never persisted.
+- The prod mail domain, derived or overridden, goes to the panes only as `MAIL_DOMAIN`. No harness log line or error names it: the summary gives counts, and an invalid `QA_MAIL_DOMAIN` is refused without echoing it. (A pane's own code runs as the reviewer and could print its env; that is the trust gate's concern.)
 
 ## Testing
 
@@ -158,6 +161,7 @@ Add dependencies with `npx pnpm@9.15.9`. The lockfile diff must contain only the
   - key minting round-tripping through the real `AgentsRepo.verifyViewerKey`, with `aws-sdk-client-mock`;
   - the seed's batching and `UnprocessedItems` retry;
   - the snapshot table lookup and pagination;
+  - the mail domain: derivation (majority, plurality, tie, no address, invalid addresses, agent records only), `QA_MAIL_DOMAIN` validation and precedence, `readBaseEnv` sharing the seed's snapshot, the error when the domain can't be derived, and that no log line names the domain;
   - the firewall output parser;
   - the DynamoDB Local command, ready check and handle;
   - the setup checksum check, and the install check against a pinned manifest: changed, missing, extra and symlinked files, a rewritten marker, and the check before each pane's emulator (on real temp trees, with an injected manifest and hash);
