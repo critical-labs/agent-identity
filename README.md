@@ -191,6 +191,46 @@ If the deploy job fails at `configure-aws-credentials`, the usual cause is a tru
 
 The API reads the same variables as the Lambda (`FLEET_KEY_REQUIRED`, `PUBLIC_REPOS`, `AUTO_CAPABILITIES`, `RETENTION_DAYS`). Mail bodies large enough to have been stored in S3 show a placeholder, because there's no S3 locally.
 
+### Side-by-side PR QA
+
+`pnpm qa` lets a reviewer try a pull request against real fleet data before merging it. It runs [qa-conductor](https://github.com/critical-labs/qa-conductor) locally: the harness on `http://127.0.0.1:3100/`, with two panes side by side, **base** (`main`) and **PR**. Each pane is its own dev server (the API plus the fleet dashboard) with its own in-memory DynamoDB Local, seeded from a redacted snapshot of the production table. From the harness you post a verdict (a comment plus a `qa-approved` or `qa-changes-requested` label) back to the PR.
+
+You need macOS (for other platforms, see step 2), Node 22+, Java 17+, and AWS credentials that can read the production stack (`cloudformation:DescribeStackResources` and `dynamodb:Scan` on its table).
+
+1. **Install DynamoDB Local** once: `pnpm qa:setup`. It downloads AWS's tarball, refuses it unless its SHA-256 matches the pin in `packages/qa/src/dynamodb-local.ts`, and extracts it under `~/.cache/qa-conductor/agent-identity/` (or `$XDG_CACHE_HOME`). The SHA-256 of every file the tarball extracts (the jar, its libraries and the native sqlite4java libraries) is pinned in `packages/qa/src/dynamodb-local-files.ts`. `pnpm qa` re-checks them all, and refuses any extra file, when it starts and again before each pane's DynamoDB Local starts: a PR's code runs as you and could change them. If anything has changed, it refuses to run; rerun `pnpm qa:setup` to reinstall. After installing, `pnpm qa:setup` checks Java and the firewall rule.
+2. **Block inbound connections to Java.** DynamoDB Local has no bind option, so it listens on every interface, and the panes hold real (if redacted) fleet data. `pnpm qa` refuses to start unless the macOS application firewall is on and blocks the exact Java binary the panes run. When the rule is missing, both commands print the fix, which is of this form:
+   ```bash
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <java>
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --blockapp <java>
+   ```
+   Loopback traffic between the harness and the panes isn't affected. On other platforms there's no check: bind your own host firewall rule for Java, then set `QA_ALLOW_UNFIREWALLED=1`.
+3. **Create `.env.qa`** at the repo root (it's gitignored; `QA_ENV_FILE` points elsewhere):
+   ```bash
+   GITHUB_QA_TOKEN=<your token: read PRs, comment and label on this repo>
+   QA_MAIL_DOMAIN=<the production mail domain>
+   # optional:
+   # as the Lambda's PUBLIC_REPOS:
+   # QA_PUBLIC_REPOS=owner/repo,...
+   # as the Lambda's AUTO_CAPABILITIES:
+   # QA_AUTO_CAPABILITIES=...
+   # QA_TRUSTED_LOGINS=critical-agent-zero
+   # QA_BASE_REF=main
+   # QA_STACK_NAME=AgentIdentity
+   # the production stack's region (the deploy workflow's AWS_REGION):
+   # QA_AWS_REGION=us-east-1
+   ```
+   Comments go on their own lines: a `#` after a value is read as part of it. The token is the **reviewer's**, never an agent's: agents contribute with read-only access. `QA_MAIL_DOMAIN` is the production domain so the dashboard's mail-address redaction behaves as it does in production. `QA_AWS_REGION` is the region the snapshot reads the stack and table in: set it to the deploy workflow's `AWS_REGION` variable. Without it, your AWS profile's default region is used, which may not be the stack's.
+4. **Run it** with your AWS profile active: `pnpm qa`, then open `http://127.0.0.1:3100/`, pick a PR and boot it. Ctrl-C tears both panes down.
+
+**Whose PRs can boot.** Booting a PR runs its code on your machine, as you. The trust gate lets a PR boot only when its author has write access to this repo or is listed in `QA_TRUSTED_LOGINS` (default `critical-agent-zero`; set it empty to trust write access alone), and its head is in this repo or the author's own fork. Listing a login is a local decision to run that author's PRs; it grants nothing on GitHub. The list is keyed on GitHub logins, and a login can be renamed, then registered later by someone else, who would inherit the trust. Keep the list short and review it; write access remains the default gate. Installs use CI's pnpm major (`npx pnpm@9.15.9 install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`), and each pane runs with only `PATH` plus its own settings (dummy AWS credentials, its local table, the mail domain), bound to `127.0.0.1`.
+
+**What the panes see.** On the first boot, the harness scans the production table once, read-only, with your AWS credentials. It keeps the snapshot in memory only (never on disk) until you stop `pnpm qa`. The redaction fails closed: both the kinds of item and the attributes of each kind that reach a pane are allowlists.
+- Agents, address mirrors, activity and status keep the fields their record types define; an attribute added later is dropped until it is listed in `packages/qa/src/redact.ts`.
+- Emails keep their sender, dates, authentication verdicts and subject. The subject keeps only plain words (lower-case, or capitalised like `Welcome`) and punctuation; every other word is shown as `••••`, so `Your code is 123 456` becomes `Your code is •••• ••••` and `Your code is XKQ-RPT` becomes `Your code is ••••`. Numbers, acronyms and mixed case go too (`PR #12 merged` becomes `•••• •••• merged`). One gap remains: a code that is a single lower-case or capitalised word, such as `kxqprt`, looks like a word and is shown. The body becomes `[redacted for QA]`, links are emptied, and HTML and every other attribute are dropped.
+- **Everything else is dropped**: fleet, admin and viewer key hashes, replay nonces, and any kind of item added later. Each pane mints its own viewer key, which the harness passes to the dashboard in the URL fragment. `pnpm qa` logs how many items it dropped per kind, and which unlisted attributes it dropped from kept items (key prefixes and attribute names only, never values), so a new kind or attribute that panes should see can be added to `packages/qa/src/redact.ts` deliberately.
+
+**Known limitation: the table schema comes from the harness.** The seed creates each pane's table before the pane starts, using `ensureTable` from the checkout you run `pnpm qa` from (normally `main`). The pane's own dev server then finds the table already there, so its `ensureTable` does nothing. A PR that changes the table's key schema therefore runs against the old schema; QA of such a PR needs its pane table recreated with the PR's schema, which the harness doesn't do.
+
 ### Releasing to npm
 
 Bump `version` in `packages/dist/package.json`, commit, then tag and push:
