@@ -6,7 +6,7 @@
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { redactItem, shapeKey, type Item } from "./redact.js";
+import { redactItem, shapeKey, unlistedAttributes, type Item } from "./redact.js";
 
 /** The physical name of the stack's table (CDK logical id `Table<hash>`). */
 export async function findTableName(cfn: CloudFormationClient, stackName: string): Promise<string> {
@@ -21,11 +21,15 @@ export async function findTableName(cfn: CloudFormationClient, stackName: string
   return tables[0].PhysicalResourceId!;
 }
 
-/** The redacted items, plus how many items were dropped per shape
- *  (`NONCE#/SIG#` → 12; see shapeKey): key prefixes only, never values. */
+/** The redacted items, plus the drop report: how many items were dropped
+ *  per shape (`NONCE#/SIG#` → 12; see shapeKey), and how often a kept item
+ *  lost an attribute its shape doesn't list (`AGENT#/AGENT .webhookSecret`
+ *  → 3; see unlistedAttributes). Key prefixes and attribute names only,
+ *  never values. */
 export interface Snapshot {
   items: Item[];
   dropped: Record<string, number>;
+  droppedAttributes: Record<string, number>;
 }
 
 const byKey = ([a]: [string, number], [b]: [string, number]) => (a < b ? -1 : a > b ? 1 : 0);
@@ -40,6 +44,8 @@ export async function loadSnapshot({ stackName, cfn, ddb }: {
   const TableName = await findTableName(cfn, stackName);
   const items: Item[] = [];
   const dropped = new Map<string, number>();
+  const droppedAttributes = new Map<string, number>();
+  const count = (counts: Map<string, number>, key: string) => counts.set(key, (counts.get(key) ?? 0) + 1);
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
     const page = await ddb.send(new ScanCommand({ TableName, ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}) }));
@@ -47,24 +53,32 @@ export async function loadSnapshot({ stackName, cfn, ddb }: {
       const kept = redactItem(item);
       if (kept) {
         items.push(kept);
+        for (const name of unlistedAttributes(item)) count(droppedAttributes, `${shapeKey(item)} .${name}`);
       } else {
-        const key = shapeKey(item);
-        dropped.set(key, (dropped.get(key) ?? 0) + 1);
+        count(dropped, shapeKey(item));
       }
     }
     ExclusiveStartKey = page.LastEvaluatedKey;
   } while (ExclusiveStartKey);
-  return { items, dropped: Object.fromEntries([...dropped].sort(byKey)) };
+  const sorted = (counts: Map<string, number>) => Object.fromEntries([...counts].sort(byKey));
+  return { items, dropped: sorted(dropped), droppedAttributes: sorted(droppedAttributes) };
 }
 
-/** One log line: what the panes get, and what they don't, per shape. A new
- *  kind of item showing up here is the cue to decide, in redact.ts, whether
- *  panes should see it. */
-export function describeSnapshot({ items, dropped }: Snapshot): string {
-  const entries = Object.entries(dropped).sort(byKey);
+/** `3: A ×1, B ×2`, or `none`. */
+function describeCounts(counts: Record<string, number>): string {
+  const entries = Object.entries(counts).sort(byKey);
   const total = entries.reduce((sum, [, n]) => sum + n, 0);
-  const detail = total === 0 ? "none" : `${total}: ${entries.map(([key, n]) => `${key} ×${n}`).join(", ")}`;
-  return `snapshot: kept ${items.length} item(s), dropped ${detail}`;
+  return total === 0 ? "none" : `${total}: ${entries.map(([key, n]) => `${key} ×${n}`).join(", ")}`;
+}
+
+/** One log line: what the panes get, and what they don't, per shape and per
+ *  unlisted attribute. A new kind of item or attribute showing up here is
+ *  the cue to decide, in redact.ts, whether panes should see it. */
+export function describeSnapshot({ items, dropped, droppedAttributes }: Snapshot): string {
+  const line = `snapshot: kept ${items.length} item(s), dropped ${describeCounts(dropped)}`;
+  return Object.keys(droppedAttributes).length === 0
+    ? line
+    : `${line}; unlisted attributes dropped ${describeCounts(droppedAttributes)}`;
 }
 
 /** Run `load` once and share its result. A failure isn't cached, so a later

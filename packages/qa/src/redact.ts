@@ -1,3 +1,5 @@
+import type { ActivityEvent, AgentRecord, AgentStatus, NewEmail } from "@agent-identity/api";
+
 /** A table item as the DynamoDB document client returns it. */
 export type Item = Record<string, unknown>;
 
@@ -51,12 +53,51 @@ export function shapeKey(item: Item): string {
   return `${keyPart(item.PK)}/${keyPart(item.SK)}`;
 }
 
-/** The email attributes a pane keeps verbatim. An allowlist, so a sensitive
- *  attribute added to emails later is dropped by default. `subject`, `text`
- *  and `links` are rewritten separately. */
-const EMAIL_KEEP = [
-  "PK", "SK", "id", "messageId", "from", "receivedAt", "rawS3Key", "auth", "unsolicited", "expiresAt",
-];
+/** Attribute names of the record type T, checked by the compiler, so a
+ *  renamed field breaks the build here instead of silently dropping out. */
+const fieldsOf = <T>() => <K extends keyof T & string>(...names: K[]): string[] => names;
+
+/** The attributes each shape keeps verbatim. Allowlists, like the shapes: a
+ *  field added to a record later (a webhook secret, a key hash, a session
+ *  token) is dropped by default, and the drop report names it (see
+ *  unlistedAttributes) so it can be added here on purpose. */
+const KEEP: Record<Shape, readonly string[]> = {
+  agent: ["PK", "SK", ...fieldsOf<AgentRecord>()(
+    "agentId", "address", "publicKey", "status", "createdAt", "capabilities", "mailbox", "allowlist", "catchAll",
+  )],
+  addr: ["PK", "SK", "fingerprint"],
+  // `expiresAt` is the claimed events' TTL, added by ActivityRepo.putEvent.
+  activity: ["PK", "SK", "expiresAt", ...fieldsOf<ActivityEvent>()(
+    "agentId", "ts", "class", "type", "summary", "detail", "ref",
+  )],
+  status: ["PK", "SK", ...fieldsOf<AgentStatus>()("state", "label", "updatedAt")],
+  // `subject`, `text` and `links` are rewritten separately (see EMAIL_HANDLED).
+  email: ["PK", "SK", "id", "expiresAt", ...fieldsOf<NewEmail>()(
+    "messageId", "from", "receivedAt", "rawS3Key", "auth", "unsolicited",
+  )],
+};
+
+/** Email attributes redactItem rewrites (`subject`, `text`, `links`) or
+ *  removes on purpose (`html`, `bodyS3Key`): known, so not reported. */
+const EMAIL_HANDLED: readonly string[] = fieldsOf<NewEmail>()("subject", "text", "links", "html", "bodyS3Key");
+
+/** An attribute name as the drop report may print it: a camelCase
+ *  identifier, like every attribute the repo writes. Anything else is `?`. */
+const ATTRIBUTE_NAME = /^[a-z][A-Za-z0-9_]{0,63}$/;
+
+/** The attributes of an item of a listed shape that redactItem drops without
+ *  knowing them: neither kept nor, for emails, handled on purpose. Names
+ *  only (`?` for a name that isn't an identifier), sorted; never values.
+ *  Empty for an item of an unlisted shape, which is dropped whole. */
+export function unlistedAttributes(item: Item): string[] {
+  const shape = shapeOf(item);
+  if (shape === null) return [];
+  const known = new Set([...KEEP[shape], ...(shape === "email" ? EMAIL_HANDLED : [])]);
+  return Object.keys(item)
+    .filter((name) => !known.has(name))
+    .map((name) => (ATTRIBUTE_NAME.test(name) ? name : "?"))
+    .sort();
+}
 
 export const REDACTED_TEXT = "[redacted for QA]";
 export const MASK = "••••";
@@ -99,18 +140,21 @@ export function maskSubject(subject: string): string {
 
 /** What of one prod item may go into a QA pane: the item to write, or null
  *  to drop it. Pure: the input is never modified.
- *  - agents, address mirrors, activity and status are copied;
+ *  - agents, address mirrors, activity and status keep their listed
+ *    attributes (see KEEP);
  *  - emails keep their envelope (sender, dates, verdicts, masked subject),
  *    while the body is replaced and the links emptied: a mailbox can hold
  *    live login codes and magic links;
- *  - every other shape is dropped (see SHAPES). */
+ *  - every other shape is dropped (see SHAPES), and so is every attribute a
+ *    shape doesn't list. */
 export function redactItem(item: Item): Item | null {
   const shape = shapeOf(item);
   if (shape === null) return null;
-  if (shape !== "email") return { ...item };
 
   const out: Item = {};
-  for (const key of EMAIL_KEEP) if (key in item) out[key] = item[key];
+  for (const key of KEEP[shape]) if (Object.hasOwn(item, key)) out[key] = item[key];
+  if (shape !== "email") return out;
+
   if (typeof item.subject === "string") out.subject = maskSubject(item.subject);
   // Set even when the body lived in S3 (bodyS3Key is removed), so the pane
   // shows the redaction rather than an empty body.

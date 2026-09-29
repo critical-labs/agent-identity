@@ -68,6 +68,25 @@ describe("loadSnapshot", () => {
     expect(dropped).toEqual({ "VIEWER#/VIEWER": 1 });
   });
 
+  it("drops attributes a kept item's shape doesn't list, counting them by name, never by value", async () => {
+    docMock.on(ScanCommand).resolvesOnce({ Items: [
+      { ...agent, webhookSecret: "s3cr3t-hook" },
+      { PK: "AGENT#fp2", SK: "AGENT", agentId: "731904", webhookSecret: "s3cr3t-2", KXQRPT: "x" },
+      { PK: "AGENT#482913", SK: "STATUS", state: "idle", sessionToken: "t0k3n" },
+      { ...email, html: "<p>code</p>", bodyS3Key: "bodies/abc", headers: { "x-secret": "h" } },
+    ] });
+    const { items, droppedAttributes } = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
+    expect(items[0]).toEqual(agent);
+    expect(droppedAttributes).toEqual({
+      "AGENT#/AGENT .?": 1,
+      "AGENT#/AGENT .webhookSecret": 2,
+      "AGENT#/STATUS .sessionToken": 1,
+      "MAILBOX#/EMAIL# .headers": 1,
+    });
+    const report = JSON.stringify(droppedAttributes);
+    for (const value of ["s3cr3t", "t0k3n", "KXQRPT", "x-secret", "fp1", "fp2", "482913", "731904"]) expect(report).not.toContain(value);
+  });
+
   it("counts what it drops per PK and SK prefix, never by value", async () => {
     docMock.on(ScanCommand)
       .resolvesOnce({ Items: [agent, { PK: "NONCE#fp1", SK: "SIG#c2lnMQ" }, { PK: "FLEET#9f86d081", SK: "FLEET" }], LastEvaluatedKey: { PK: "x", SK: "y" } })
@@ -79,8 +98,9 @@ describe("loadSnapshot", () => {
         { PK: "OTP#482914", SK: "KXQRPT", code: "KXQRPT" },
         { PK: "AGENT#fp1", SK: "SESSION#1", token: "t0k3n" },
       ] });
-    const { items, dropped } = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
+    const { items, dropped, droppedAttributes } = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
     expect(items).toEqual([agent]);
+    expect(droppedAttributes).toEqual({});
     expect(dropped).toEqual({ "AGENT#/SESSION#": 1, "FLEET#/FLEET": 1, "MAILBOX#/?": 1, "NONCE#/SIG#": 2, "OTP#/?": 2 });
     const report = JSON.stringify(dropped);
     for (const value of ["fp1", "fp2", "c2lnMQ", "9f86d081", "482913", "482914", "731904", "KXQRPT", "t0k3n"]) {
@@ -90,18 +110,27 @@ describe("loadSnapshot", () => {
 
   it("handles an empty table", async () => {
     docMock.on(ScanCommand).resolves({});
-    expect(await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb })).toEqual({ items: [], dropped: {} });
+    expect(await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb })).toEqual({ items: [], dropped: {}, droppedAttributes: {} });
   });
 });
 
 describe("describeSnapshot", () => {
+  const items = [{ PK: "AGENT#a" }, { PK: "AGENT#b" }];
+
   it("says how much was kept, and what was dropped per shape, sorted", () => {
-    expect(describeSnapshot({ items: [{ PK: "AGENT#a" }, { PK: "AGENT#b" }], dropped: { "NONCE#/SIG#": 2, "FLEET#/FLEET": 1 } }))
+    expect(describeSnapshot({ items, dropped: { "NONCE#/SIG#": 2, "FLEET#/FLEET": 1 }, droppedAttributes: {} }))
       .toBe("snapshot: kept 2 item(s), dropped 3: FLEET#/FLEET ×1, NONCE#/SIG# ×2");
   });
 
+  it("names the unlisted attributes it dropped from kept items, sorted", () => {
+    const droppedAttributes = { "AGENT#/STATUS .sessionToken": 1, "AGENT#/AGENT .webhookSecret": 3 };
+    expect(describeSnapshot({ items, dropped: {}, droppedAttributes })).toBe(
+      "snapshot: kept 2 item(s), dropped none; unlisted attributes dropped 4: AGENT#/AGENT .webhookSecret ×3, AGENT#/STATUS .sessionToken ×1",
+    );
+  });
+
   it("says when nothing was dropped", () => {
-    expect(describeSnapshot({ items: [], dropped: {} })).toBe("snapshot: kept 0 item(s), dropped none");
+    expect(describeSnapshot({ items: [], dropped: {}, droppedAttributes: {} })).toBe("snapshot: kept 0 item(s), dropped none");
   });
 });
 
@@ -170,7 +199,7 @@ describe("createSnapshotLoader", () => {
     await snapshot();
     await snapshot();
     expect(onLoaded).toHaveBeenCalledOnce();
-    expect(onLoaded).toHaveBeenCalledWith({ items: [agent()], dropped: { "VIEWER#/VIEWER": 1 } });
+    expect(onLoaded).toHaveBeenCalledWith({ items: [agent()], dropped: { "VIEWER#/VIEWER": 1 }, droppedAttributes: {} });
   });
 
   function agent() {

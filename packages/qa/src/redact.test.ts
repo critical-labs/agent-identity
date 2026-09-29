@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { MASK, REDACTED_TEXT, maskSubject, redactItem, shapeKey, shapeOf } from "./redact.js";
+import { MASK, REDACTED_TEXT, maskSubject, redactItem, shapeKey, shapeOf, unlistedAttributes } from "./redact.js";
 
 const email = (extra: Record<string, unknown> = {}) => ({
   PK: "MAILBOX#482913",
@@ -17,17 +17,36 @@ const email = (extra: Record<string, unknown> = {}) => ({
   ...extra,
 });
 
+// Every attribute each non-mail shape lists, as the repo's writers store them.
+const listed = {
+  agent: {
+    PK: "AGENT#fp1", SK: "AGENT", agentId: "billing", address: "billing@mail.example.test", publicKey: "MCowBQYDK2VwAyEA",
+    status: "active", createdAt: "2026-09-01T12:00:00.000Z", capabilities: ["email"],
+    mailbox: true, allowlist: ["*@example.test"], catchAll: false,
+  },
+  addr: { PK: "ADDR#482913", SK: "ADDR", fingerprint: "fp1" },
+  activity: {
+    PK: "AGENT#482913", SK: "ACT#2026-09-01T12:00:00.000Z#01J9", expiresAt: 1788000000,
+    agentId: "482913", ts: "2026-09-01T12:00:00.000Z", class: "attested", type: "forge_pr",
+    summary: "Fix 12345", detail: { repo: "o/r" }, ref: "https://example.test/o/r/pull/1",
+  },
+  status: { PK: "AGENT#482913", SK: "STATUS", state: "working", label: "reviewing", updatedAt: "2026-09-01T12:00:00.000Z" },
+};
+
 describe("redactItem: item shapes are an allowlist", () => {
-  it.each([
-    ["agent", { PK: "AGENT#fp1", SK: "AGENT", agentId: "482913", address: "482913@mail.example.test", status: "active" }],
-    ["addr", { PK: "ADDR#482913", SK: "ADDR", fingerprint: "fp1" }],
-    ["activity", { PK: "AGENT#482913", SK: "ACT#2026-09-01T12:00:00.000Z#01J9", kind: "pr", repo: "o/r", title: "Fix 12345" }],
-    ["status", { PK: "AGENT#482913", SK: "STATUS", state: "working" }],
-  ])("copies an %s item unchanged", (shape, item) => {
+  it.each(Object.entries(listed))("keeps every listed attribute of an %s item", (shape, item) => {
     expect(shapeOf(item)).toBe(shape);
     const out = redactItem(item);
     expect(out).toEqual(item);
     expect(out).not.toBe(item);
+    expect(unlistedAttributes(item)).toEqual([]);
+  });
+
+  it.each(Object.entries(listed))("drops an attribute an %s item's shape doesn't list, and names it", (_shape, item) => {
+    const out = redactItem({ ...item, webhookSecret: "s3cr3t-hook", sessionToken: "t0k3n" })!;
+    expect(out).toEqual(item);
+    expect(unlistedAttributes({ ...item, webhookSecret: "s3cr3t-hook", sessionToken: "t0k3n" }))
+      .toEqual(["sessionToken", "webhookSecret"]);
   });
 
   it("recognises an email", () => {
@@ -132,6 +151,11 @@ describe("redactItem: emails", () => {
     ]);
   });
 
+  it("names the unknown attributes it drops, but not the ones it rewrites or removes on purpose", () => {
+    expect(unlistedAttributes(email({ bodyS3Key: "bodies/abc", id: "01J9", unsolicited: true }))).toEqual([]);
+    expect(unlistedAttributes(email({ headers: { "x-secret": "s" }, futureField: "s" }))).toEqual(["futureField", "headers"]);
+  });
+
   it("masks codes and links in the subject", () => {
     const out = redactItem(email({ subject: "Your code is 482913 — or visit https://example.test/r?t=1234" }))!;
     expect(out.subject).toBe(`Your code is ${MASK} — or visit ${MASK}`);
@@ -148,6 +172,17 @@ describe("redactItem: emails", () => {
     const before = structuredClone(item);
     redactItem(item);
     expect(item).toEqual(before);
+  });
+});
+
+describe("unlistedAttributes: names only, never values", () => {
+  it("reports a name that isn't a camelCase identifier as ?", () => {
+    const item = { ...listed.status, KXQRPT: "1", "user@example.test": "2", "482913": "3", _x: "4", okName: "5" };
+    expect(unlistedAttributes(item)).toEqual(["?", "?", "?", "?", "okName"]);
+  });
+
+  it("reports nothing for an item of an unlisted shape: it is dropped whole", () => {
+    expect(unlistedAttributes({ PK: "FLEET#9f86", SK: "FLEET", label: "ci", createdAt: "2026-09-01" })).toEqual([]);
   });
 });
 
@@ -312,14 +347,20 @@ describe("nothing sensitive survives", () => {
         items.push({ PK, SK, secret, code });
       }
 
-      // The listed non-mail shapes, which must still come through.
+      // The listed non-mail shapes, which must still come through, each with
+      // an attribute its shape doesn't list, which must not.
       if (i % 4 === 0) {
         const fp = hex(16);
+        const stray = () => {
+          const secret = `stray-${hex(24)}`;
+          secrets.push(secret);
+          return { [["webhookSecret", "keyHash", "sessionToken"][int(0, 2)]]: secret };
+        };
         items.push(
-          { PK: `AGENT#${fp}`, SK: "AGENT", agentId: String(int(100000, 999999)) },
-          { PK: `ADDR#${int(100000, 999999)}`, SK: "ADDR", fingerprint: fp },
-          { PK: `AGENT#${fp}`, SK: `ACT#${hex(10)}`, kind: "pr" },
-          { PK: `AGENT#${fp}`, SK: "STATUS", state: "idle" },
+          { PK: `AGENT#${fp}`, SK: "AGENT", agentId: String(int(100000, 999999)), ...stray() },
+          { PK: `ADDR#${int(100000, 999999)}`, SK: "ADDR", fingerprint: fp, ...stray() },
+          { PK: `AGENT#${fp}`, SK: `ACT#${hex(10)}`, type: "forge_pr", ...stray() },
+          { PK: `AGENT#${fp}`, SK: "STATUS", state: "idle", ...stray() },
         );
         listed += 4;
       }
@@ -334,6 +375,8 @@ describe("nothing sensitive survives", () => {
     for (const code of sentCodes) expect(subjects).not.toContain(code);
     for (const item of out) {
       expect(shapeOf(item)).not.toBeNull();
+      // Every attribute that came through is one its shape lists.
+      expect(unlistedAttributes(item)).toEqual([]);
       if (shapeOf(item) !== "email") continue;
       expect(item.text).toBe(REDACTED_TEXT);
       expect(item.links).toEqual([]);

@@ -9,3 +9,5 @@ export { adminKeyAuth, signatureAuth } from "./auth.js";
 // CDK stack test that pins it.
 export { ensureTable } from "./dev-app.js";
 export { TABLE_KEYS } from "@agent-identity/shared";
+// The stored record types, so the QA redaction can name their attributes.
+export type { ActivityEvent, AgentStatus } from "@agent-identity/shared";
