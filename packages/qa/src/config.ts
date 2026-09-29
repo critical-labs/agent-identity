@@ -18,9 +18,10 @@ export const QA_DEFAULTS: Record<string, string> = {
 const DEFAULT_TRUSTED_LOGINS = "critical-agent-zero";
 
 export interface QaAppConfig {
-  /** QA_MAIL_DOMAIN, when set: overrides the prod mail domain the snapshot
-   *  derives from the agents' addresses (see deriveMailDomain), which the
-   *  panes need so the fleet mail redaction behaves as in prod. */
+  /** QA_MAIL_DOMAIN, when set, lower-cased (ASCII only): overrides the prod
+   *  mail domain the snapshot derives from the agents' addresses (see
+   *  deriveMailDomain), which the panes need so the fleet mail redaction
+   *  behaves as in prod. */
   mailDomain?: string;
   publicRepos: string;
   autoCapabilities: string;
@@ -57,20 +58,32 @@ export function isMailDomain(value: string): boolean {
   return value.length <= 253 && DOMAIN.test(value);
 }
 
+/** `value` with ASCII upper case lower-cased, and nothing else changed, as
+ *  domains are compared: case doesn't matter in a domain, but a look-alike
+ *  such as the Kelvin sign must not become the letter it resembles (which
+ *  `toLowerCase` would do). Both the override and the agents' addresses go
+ *  through this before isMailDomain. */
+export function lowerAscii(value: string): string {
+  return value.replace(/[A-Z]/g, (c) => c.toLowerCase());
+}
+
 /** agent-identity's own keys, from the raw `.env.qa` map. */
 function appConfig(env: Record<string, string>): QaAppConfig {
   if (env.QA_AWS_REGION && !AWS_REGION.test(env.QA_AWS_REGION)) {
     throw new Error(`QA_AWS_REGION must be an AWS region like us-east-1, not ${JSON.stringify(env.QA_AWS_REGION)}`);
   }
+  // Lower-cased as the addresses are, so a value copied from prod in mixed
+  // case is accepted, as the derived domain would be.
+  const override = env.QA_MAIL_DOMAIN ? lowerAscii(env.QA_MAIL_DOMAIN) : undefined;
   // The value isn't echoed: logs may be pasted publicly, and the domain is private.
-  if (env.QA_MAIL_DOMAIN && !isMailDomain(env.QA_MAIL_DOMAIN)) {
+  if (override !== undefined && !isMailDomain(override)) {
     throw new Error(
-      "QA_MAIL_DOMAIN must be a bare, lower-case domain name: labels of a-z, 0-9 and -, joined by at least one dot, " +
+      "QA_MAIL_DOMAIN must be a bare domain name: labels of letters, digits and -, joined by at least one dot, " +
         "with no scheme, port, path, @ or inline comment (the value isn't shown; leave it unset to derive it)",
     );
   }
   return {
-    ...(env.QA_MAIL_DOMAIN ? { mailDomain: env.QA_MAIL_DOMAIN } : {}),
+    ...(override !== undefined ? { mailDomain: override } : {}),
     publicRepos: env.QA_PUBLIC_REPOS ?? "",
     autoCapabilities: env.QA_AUTO_CAPABILITIES ?? "",
     // `??`, not `||`: an explicitly empty value means "no extra logins".

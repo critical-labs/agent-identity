@@ -43,9 +43,10 @@ const github = createGithub({
 });
 // Once per snapshot: what the panes get, what was dropped per kind of item
 // (key prefixes only, never values), and where the mail domain comes from
-// (counts only, never the domain).
-const mailDomainOverride = cfg.app.mailDomain !== undefined;
-const onSnapshot = (snapshot: Snapshot) => console.log(`[qa] ${describeSnapshot(snapshot, { mailDomainOverride })}`);
+// (counts only, never the domain), with a warning when QA_MAIL_DOMAIN
+// matches at most half of the agents' addresses.
+const onSnapshot = (snapshot: Snapshot) =>
+  console.log(`[qa] ${describeSnapshot(snapshot, { mailDomainOverride: cfg.app.mailDomain })}`);
 const { adapters, readBaseEnv } = createQaAdapters({ cfg, github, cacheDir, java, onSnapshot });
 const conductor = startConductor({ cfg, github, fsx: { readFile: (path) => readFile(path) }, adapters, readBaseEnv });
 

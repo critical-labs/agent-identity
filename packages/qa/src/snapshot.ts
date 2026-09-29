@@ -6,7 +6,7 @@
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { isMailDomain } from "./config.js";
+import { isMailDomain, lowerAscii } from "./config.js";
 import { redactItem, shapeKey, shapeOf, unlistedAttributes, type Item } from "./redact.js";
 
 /** The physical name of the stack's table (CDK logical id `Table<hash>`). */
@@ -36,45 +36,53 @@ export interface Snapshot {
    *  never logged: logs may be pasted publicly. */
   mailDomain: string | null;
   /** The derivation's counts, which the summary prints instead: agents with
-   *  a valid address, and how many of them are at mailDomain (0 when null). */
+   *  a valid address, and how many of them are at mailDomain (all of them,
+   *  or 0 when null). */
   mailDomainCounts: { matching: number; addresses: number };
 }
 
 const byKey = ([a]: [string, number], [b]: [string, number]) => (a < b ? -1 : a > b ? 1 : 0);
 
 /** The domain of an agent's address: the text after its last `@`,
- *  lower-cased, when that is a bare mail domain (see isMailDomain) after a
- *  non-empty local part; otherwise null. Only ASCII letters are lower-cased,
- *  so a look-alike such as the Kelvin sign can't become the letter it
- *  resembles. */
+ *  lower-cased (ASCII only, see lowerAscii), when that is a bare mail domain
+ *  (see isMailDomain) after a non-empty local part; otherwise null. */
 function addressDomain(address: unknown): string | null {
   if (typeof address !== "string") return null;
   const at = address.lastIndexOf("@");
   if (at <= 0) return null;
-  const domain = address.slice(at + 1).replace(/[A-Z]/g, (c) => c.toLowerCase());
+  const domain = lowerAscii(address.slice(at + 1));
   return isMailDomain(domain) ? domain : null;
 }
 
-/** The fleet's mail domain, from the addresses of the agent records
- *  (`AGENT#…` + `AGENT`): the most common domain, provided it covers more
- *  than half of the agents with a valid address. With no valid address, a
- *  tie or a plurality short of a majority, it is null, and the reviewer
- *  sets QA_MAIL_DOMAIN instead. Invalid addresses don't count at all. */
-export function deriveMailDomain(items: Item[]): Pick<Snapshot, "mailDomain" | "mailDomainCounts"> {
-  const perDomain = new Map<string, number>();
-  let addresses = 0;
+/** The domains of the agent records' (`AGENT#…` + `AGENT`) valid addresses,
+ *  one per such agent. Invalid addresses, and other records, are left out. */
+function agentDomains(items: Item[]): string[] {
+  const domains: string[] = [];
   for (const item of items) {
     if (shapeOf(item) !== "agent") continue;
     const domain = addressDomain(item.address);
-    if (domain === null) continue;
-    addresses++;
-    perDomain.set(domain, (perDomain.get(domain) ?? 0) + 1);
+    if (domain !== null) domains.push(domain);
   }
-  // A majority is unique, so it is also the most common domain.
-  for (const [domain, matching] of perDomain) {
-    if (matching * 2 > addresses) return { mailDomain: domain, mailDomainCounts: { matching, addresses } };
+  return domains;
+}
+
+/** The fleet's mail domain, from the addresses of the agent records: the
+ *  one domain every agent with a valid address is at. Invalid addresses
+ *  don't count at all.
+ *
+ *  It fails closed: with no valid address, or addresses at more than one
+ *  domain, it is null, and the reviewer sets QA_MAIL_DOMAIN instead. A
+ *  majority isn't enough, since the most common domain need not be prod's
+ *  MAIL_DOMAIN (after MAIL_DOMAIN changed, older agents keep their old
+ *  addresses; an operator can create a mailbox at another domain), and a
+ *  wrong domain would leave fleet addresses unredacted in the panes. */
+export function deriveMailDomain(items: Item[]): Pick<Snapshot, "mailDomain" | "mailDomainCounts"> {
+  const domains = agentDomains(items);
+  const [first] = domains;
+  if (first !== undefined && domains.every((domain) => domain === first)) {
+    return { mailDomain: first, mailDomainCounts: { matching: domains.length, addresses: domains.length } };
   }
-  return { mailDomain: null, mailDomainCounts: { matching: 0, addresses } };
+  return { mailDomain: null, mailDomainCounts: { matching: 0, addresses: domains.length } };
 }
 
 /** Whether and from how many addresses the mail domain was derived:
@@ -85,7 +93,25 @@ export function describeMailDomain({ mailDomain, mailDomainCounts: { matching, a
   if (mailDomain !== null) return `derived from ${matching} of ${addresses} agent address(es)`;
   return addresses === 0
     ? "not derivable (no agent has a valid address)"
-    : `not derivable (no domain covers more than half of ${addresses} agent address(es))`;
+    : `not derivable (the ${addresses} agent address(es) are not all at one domain)`;
+}
+
+/** How the QA_MAIL_DOMAIN override compares with the agents' addresses, by
+ *  counts only, never the domain. A stale or mistyped override (an older
+ *  `.env.qa` required the key) wins over the derivation, and would give the
+ *  panes a fleet mail redaction unlike prod's, so the line warns when at
+ *  most half of the addresses are at it. In a fleet whose addresses span
+ *  several domains that can be right, hence "check", not an error. */
+function describeOverride(items: Item[], override: string, derived: boolean): string {
+  const domains = agentDomains(items);
+  const addresses = domains.length;
+  if (addresses === 0) return "set by QA_MAIL_DOMAIN (no agent has a valid address to check it against)";
+  const matching = domains.filter((domain) => domain === override).length;
+  const line = `set by QA_MAIL_DOMAIN (matches ${matching} of ${addresses} agent address(es))`;
+  if (matching * 2 > addresses) return line;
+  const why = matching === 0 ? "no agent address is at it" : "at most half of the agent addresses are at it";
+  const fix = derived ? ", or unset it to use the domain all of them are at" : "";
+  return `${line}; WARNING: ${why}: check that QA_MAIL_DOMAIN is prod's MAIL_DOMAIN${fix}`;
 }
 
 /** Scan the whole table (read-only) and keep what redactItem allows. Items
@@ -130,13 +156,15 @@ function describeCounts(counts: Record<string, number>): string {
  *  unlisted attribute. A new kind of item or attribute showing up here is
  *  the cue to decide, in redact.ts, whether panes should see it. It ends
  *  with where the panes' mail domain comes from (`mailDomainOverride`:
- *  QA_MAIL_DOMAIN is set), by counts only: the domain itself is never
- *  logged. */
-export function describeSnapshot(snapshot: Snapshot, { mailDomainOverride = false } = {}): string {
+ *  QA_MAIL_DOMAIN, when set) and how it compares with the agents'
+ *  addresses, by counts only: the domain itself is never logged. */
+export function describeSnapshot(snapshot: Snapshot, { mailDomainOverride }: { mailDomainOverride?: string } = {}): string {
   const { items, dropped, droppedAttributes } = snapshot;
   const parts = [`snapshot: kept ${items.length} item(s), dropped ${describeCounts(dropped)}`];
   if (Object.keys(droppedAttributes).length > 0) parts.push(`unlisted attributes dropped ${describeCounts(droppedAttributes)}`);
-  parts.push(`mail domain: ${mailDomainOverride ? "set by QA_MAIL_DOMAIN" : describeMailDomain(snapshot)}`);
+  parts.push(`mail domain: ${mailDomainOverride === undefined
+    ? describeMailDomain(snapshot)
+    : describeOverride(items, mailDomainOverride, snapshot.mailDomain !== null)}`);
   return parts.join("; ");
 }
 

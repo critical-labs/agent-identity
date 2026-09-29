@@ -87,7 +87,13 @@ describe("loadQaConfig", () => {
     expect(loadQaConfig(envFile([...minimal, "QA_MAIL_DOMAIN=agents.example.test"])).app.mailDomain).toBe("agents.example.test");
   });
 
-  it("refuses a QA_MAIL_DOMAIN that isn't a bare lower-case domain, without echoing it", () => {
+  it("lower-cases a QA_MAIL_DOMAIN in mixed case, as the agents' addresses are", () => {
+    // Such as a value copied from prod's secret, which an older .env.qa may still hold.
+    expect(loadQaConfig(envFile([...minimal, "QA_MAIL_DOMAIN=Mail.Example.Test"])).app.mailDomain).toBe("mail.example.test");
+    expect(loadQaConfig(envFile([...minimal, "QA_MAIL_DOMAIN=MAIL.EXAMPLE.TEST"])).app.mailDomain).toBe("mail.example.test");
+  });
+
+  it("refuses a QA_MAIL_DOMAIN that isn't a bare domain, without echoing it", () => {
     for (const value of [
       // The env file parser keeps an inline comment as part of the value.
       "mail.example.test             # the fleet's domain",
@@ -95,8 +101,11 @@ describe("loadQaConfig", () => {
       "mail.example.test:25",
       "mail.example.test/inbox",
       "ops@mail.example.test",
-      "Mail.Example.Test",
       "mailhost",
+      // Only ASCII is lower-cased: the Kelvin sign doesn't become "k", nor a
+      // Cyrillic "Е" an "e".
+      "K.example.test",
+      "mail.Еxample.test",
     ]) {
       let message = "";
       try {
@@ -104,7 +113,7 @@ describe("loadQaConfig", () => {
       } catch (err) {
         message = (err as Error).message;
       }
-      expect(message).toMatch(/QA_MAIL_DOMAIN must be a bare, lower-case domain name/);
+      expect(message).toMatch(/QA_MAIL_DOMAIN must be a bare domain name/);
       // Logs may be pasted publicly: the value, or the domain in it, is never shown.
       expect(message).not.toContain(value);
       expect(message).not.toMatch(/example|mailhost/i);

@@ -279,10 +279,15 @@ describe("seed, envTransform, auth and the base env", () => {
     expect(loaderOf()).not.toHaveBeenCalled();
   });
 
+  it("gives the panes a mixed-case QA_MAIL_DOMAIN lower-cased", async () => {
+    const { readBaseEnv } = setup(["QA_MAIL_DOMAIN=Override.Example.Test"]);
+    expect((await readBaseEnv()).MAIL_DOMAIN).toBe("override.example.test");
+  });
+
   it("tells the reviewer to set QA_MAIL_DOMAIN when the snapshot can't give the domain", async () => {
     stub.snapshot = snapshotAt(null, { addresses: 4 });
     await expect(setup().readBaseEnv()).rejects.toThrow(
-      "the mail domain is not derivable (no domain covers more than half of 4 agent address(es)): " +
+      "the mail domain is not derivable (the 4 agent address(es) are not all at one domain): " +
         "set QA_MAIL_DOMAIN in .env.qa and restart pnpm qa",
     );
     stub.snapshot = snapshotAt(null, { addresses: 0 });
@@ -318,6 +323,22 @@ describe("seed, envTransform, auth and the base env", () => {
       expect((await readBaseEnv()).MAIL_DOMAIN).toBe("mail.example.test");
       expect(await seedSnapshotOf()()).toEqual(items);
       expect(await readBaseEnv()).toEqual({ MAIL_DOMAIN: "mail.example.test", PUBLIC_REPOS: "", AUTO_CAPABILITIES: "" });
+      expect(docMock.commandCalls(ScanCommand)).toHaveLength(1);
+    });
+
+    it("fails the boot when prod's agents span domains, rather than guess by majority", async () => {
+      docMock.on(ScanCommand).resolves({ Items: [
+        ...items,
+        { PK: "AGENT#fp3", SK: "AGENT", agentId: "731905", address: "c@mail.example.test" },
+        { PK: "AGENT#fp4", SK: "AGENT", agentId: "731906", address: "d@other.example.test" },
+      ] });
+      const { readBaseEnv } = setup();
+      await expect(readBaseEnv()).rejects.toThrow(
+        "the mail domain is not derivable (the 4 agent address(es) are not all at one domain): " +
+          "set QA_MAIL_DOMAIN in .env.qa and restart pnpm qa",
+      );
+      // One scan all the same: the seed reuses it.
+      expect(await seedSnapshotOf()()).toHaveLength(4);
       expect(docMock.commandCalls(ScanCommand)).toHaveLength(1);
     });
 
