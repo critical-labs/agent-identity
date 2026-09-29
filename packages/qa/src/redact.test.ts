@@ -141,13 +141,15 @@ describe("redactItem: emails", () => {
   });
 });
 
-describe("maskSubject: per whitespace-separated token", () => {
+describe("maskSubject: keeps plain words, masks every other token", () => {
   it.each([
     // The spec's examples.
     ["Your verification code is 123 456", "Your verification code is •••• ••••"],
     ["Sign in at login.example.test/magic/k9F", "Sign in at ••••"],
     ["Welcome to the fleet", "Welcome to the fleet"],
-    ["PR #12 merged", "PR •••• merged"],
+    // Numbers, acronyms and mixed case are masked too: an accepted loss of fidelity.
+    ["PR #12 merged", "•••• •••• merged"],
+    ["[GitHub] Please verify your device", "•••• Please verify your device"],
     // Code formats a digit-run rule misses.
     ["Code: 123-456", "Code: ••••"],
     ["Code 12 34 56", "Code •••• •••• ••••"],
@@ -155,10 +157,23 @@ describe("maskSubject: per whitespace-separated token", () => {
     ["Code X4K-9PQ", "Code ••••"],
     ["Code AB12CD", "Code ••••"],
     ["Code (1234).", "Code ••••"],
+    // Codes with no digit at all.
+    ["Code XKQ-RPT", "Code ••••"],
+    ["Your Slack confirmation code: QWERTY", "Your Slack confirmation code: ••••"],
+    ["code dog-cat-fish", "code ••••"],
+    ["Code ABCDEF", "Code ••••"],
+    ["Code: KQX-PFR", "Code: ••••"],
+    ["Code KQX-PFR.", "Code ••••"],
+    ["code WDJB-MJHT", "code ••••"],
+    ["code abcd-efgh", "code ••••"],
+    ["Code AbCdEf", "Code ••••"],
+    ["open magic?token=AbCdEf", "open ••••"],
     // Unicode digits: full-width (Nd), and superscript / circled (No, and NFKC digits).
     ["Code １２３４５６", "Code ••••"],
     ["Code ¹²³⁴⁵⁶", "Code ••••"],
     ["Code ①②③", "Code ••••"],
+    // Compatibility forms count as what they stand for: circled capitals are capitals.
+    ["Code ⓍⓀⓆ", "Code ••••"],
     // Links, hosts, paths and addresses, with or without a scheme.
     ["see https://a.test/x and www.b.test", "see •••• and ••••"],
     ["token in HTTPS://A.TEST", "token in ••••"],
@@ -167,11 +182,16 @@ describe("maskSubject: per whitespace-separated token", () => {
     ["path /magic/k9F", "path ••••"],
     ["mail user@example.test now", "mail •••• now"],
     ["host ｌｏｇｉｎ．ｅｘａｍｐｌｅ．ｔｅｓｔ", "host ••••"],
-    ["full-width ｋ９Ｆ／ｘ", "full-width ••••"],
-    // Plain words and punctuation stay, and so does the spacing.
+    ["wide ｋ９Ｆ／ｘ", "wide ••••"],
+    // Plain words stay: capitalised, with an apostrophe, quoted or bracketed, with
+    // punctuation, and full-width; so do lone capitals, punctuation and the spacing.
     ["Hello, world. Welcome!", "Hello, world. Welcome!"],
+    ["I don't know — a “quoted” (aside) & it’s fine?", "I don't know — a “quoted” (aside) & it’s fine?"],
+    ["Ｗｅｌｃｏｍｅ aboard", "Ｗｅｌｃｏｍｅ aboard"],
     ["  two  spaces\tand a tab ", "  two  spaces\tand a tab "],
     ["", ""],
+    // Known gap: a code that is one lower-case or capitalised word reads as a word.
+    ["code kxqprt", "code kxqprt"],
   ])("%j → %j", (input, expected) => {
     expect(maskSubject(input)).toBe(expected);
   });
@@ -189,18 +209,28 @@ function rng(seed: number): () => number {
   };
 }
 
-/** A subject token the masking must not let through: any digit, or anything
- *  that looks like a host, path, address or link. */
-const leaks = (token: string) =>
-  token !== MASK && (/\p{Nd}/u.test(token) || /[/@]|\.\p{L}|https?:|www\./iu.test(token.normalize("NFKC")));
+/** The spec's rule, restated here rather than imported: a subject token
+ *  may be shown only when, in NFKC form, it is a plain word, a lone capital
+ *  or punctuation. Any other token that isn't the mask is a leak. */
+const SHOWABLE = [
+  /^[("'“‘]*\p{Lu}?\p{Ll}+(?:['’]\p{Ll}+)?[)"'”’.,:;!?]*$/u,
+  /^\p{Lu}$/u,
+  /^[^\p{L}\p{N}]+$/u,
+];
+const leaks = (token: string) => token !== MASK && !SHOWABLE.some((re) => re.test(token.normalize("NFKC")));
 
 describe("nothing sensitive survives", () => {
-  it("leaves no body, html, link, digit or host/path token, stray attribute or unlisted item shape", () => {
+  it("leaves no body, html, link, code, non-word subject token, stray attribute or unlisted item shape", () => {
     const rand = rng(20260929);
     const int = (lo: number, hi: number) => lo + Math.floor(rand() * (hi - lo + 1));
     const hex = (n: number) => Array.from({ length: n }, () => "0123456789abcdef"[int(0, 15)]).join("");
+    const letters = (n: number, from: string) => Array.from({ length: n }, () => from[int(0, from.length - 1)]).join("");
+    const upper = (n: number) => letters(n, "ABCDEFGHIJKLMNOPQRSTUVWXYZ");
+    const word = () => letters(int(3, 5), "abcdefghijklmnopqrstuvwxyz");
     const fullWidth = (s: string) => s.replace(/\d/g, (d) => String.fromCharCode(0xff10 + Number(d)));
     const secrets: string[] = [];
+    // Every code a subject carried: none may survive, whatever its shape.
+    const sentCodes: string[] = [];
     const items: Record<string, unknown>[] = [];
     let listed = 0;
 
@@ -216,13 +246,19 @@ describe("nothing sensitive survives", () => {
         `AB${n.slice(0, 2)}CD`,
         fullWidth(n),
         String(int(1000, 99_999_999)),
+        // Codes with no digit at all.
+        `${upper(3)}-${upper(3)}`,
+        upper(6),
+        `${upper(4)}-${upper(4)}`,
+        `${word()}-${word()}-${word()}`,
       ];
     };
+    const formats = codes().length;
 
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < 10 * formats * 4; i++) {
       // Every code format meets every subject template and link form.
-      const code = codes()[i % 8];
-      const template = Math.floor(i / 8) % 4;
+      const code = codes()[i % formats];
+      const template = Math.floor(i / formats) % 4;
       const token = hex(24);
       const link = [
         `https://login.example.test/magic?token=${token}`,
@@ -248,6 +284,7 @@ describe("nothing sensitive survives", () => {
         expiresAt: 1788000000,
       });
       listed++;
+      if (template !== 2) sentCodes.push(code);
 
       // Credential hashes, nonces, and shapes no writer produces today.
       for (const [PK, SK] of [
@@ -282,6 +319,9 @@ describe("nothing sensitive survives", () => {
     expect(out).toHaveLength(listed);
     const dump = JSON.stringify(out);
     for (const secret of secrets) expect(dump).not.toContain(secret);
+    const subjects = JSON.stringify(out.filter((item) => shapeOf(item) === "email").map((item) => item.subject));
+    expect(sentCodes.length).toBeGreaterThan(0);
+    for (const code of sentCodes) expect(subjects).not.toContain(code);
     for (const item of out) {
       expect(shapeOf(item)).not.toBeNull();
       if (shapeOf(item) !== "email") continue;

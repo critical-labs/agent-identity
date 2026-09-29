@@ -79,12 +79,18 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
     - kept: `PK`, `SK`, `id`, `messageId`, `from`, `receivedAt`, `rawS3Key`, `auth`, `unsolicited` and `expiresAt`, plus `subject` masked as below;
     - replaced: `text` becomes `[redacted for QA]`, and `links` becomes `[]`;
     - removed: `html`, `bodyS3Key` and **any attribute not in the keep list**.
-  - **Subject masking works on whitespace-separated tokens.** Any token that contains a digit (Unicode `\p{Nd}`, so full-width digits too), or that looks like a host or path (it contains `/`, `@`, or a `.` followed by a letter), becomes `••••`. So do `http(s)://` and `www.` links. Plain words are kept, so `Your verification code is 123 456` becomes `Your verification code is •••• ••••`, `Sign in at login.example.test/magic/k9F` becomes `Sign in at ••••`, and `Welcome to the fleet` is unchanged. Numbers like `PR #12` get masked too; that's an accepted loss of fidelity. The implementation errs further toward masking: any Unicode number (`\p{N}`, so superscript and circled digits as well as `\p{Nd}`) counts as a digit, and each token is checked both as written and in its NFKC form, so full-width `／`, `＠` and `．` count too.
+  - **Subject masking works on whitespace-separated tokens: keep plain words, mask everything else.** (Revised after review: a rule that masked only tokens with a digit or a host/path shape let letter-only codes such as `XKQ-RPT`, `QWERTY` or `dog-cat-fish` through; about 1 in 7 random 6-character `[A-Z0-9]` codes has no digit.) A token is kept only when its NFKC form is:
+    - a plain word, `^[("'“‘]*\p{Lu}?\p{Ll}+(?:['’]\p{Ll}+)?[)"'”’.,:;!?]*$`: lower-case letters, optionally after one capital and with one inner apostrophe, in optional quotes or brackets and with optional trailing punctuation (`Welcome`, `don't`, `world.`, `(aside)`);
+    - a single capital letter (`I`, `A`);
+    - or punctuation only, with no letter or number (`—`, `&`, `-`).
+
+    Every other token becomes `••••`. So `Your verification code is 123 456` becomes `Your verification code is •••• ••••`, `Sign in at login.example.test/magic/k9F` becomes `Sign in at ••••`, `Your code is XKQ-RPT` becomes `Your code is ••••`, and `Welcome to the fleet` is unchanged. Numbers, all-caps and mixed-case tokens are masked too, acronyms and `[GitHub]` included, so `PR #12 merged` becomes `•••• •••• merged`; that's an accepted loss of fidelity. Checking the NFKC form means full-width and other compatibility forms count as what they stand for (`１２３` is a number, `ⓍⓀⓆ` capitals).
+    - **Known gap:** a code made of one lower-case or capitalised word (e.g. `kxqprt`) is kept, since it can't be told from a word without a dictionary.
   - Tests include a "nothing sensitive survives" property:
     - no original `text`, `html` or link;
-    - no token with a digit, and no host/path token, left in any subject;
+    - no subject token that isn't `••••` or allowed by the rule above (restated in the test, not imported), and no generated code anywhere in the subjects;
     - no item of an unlisted shape;
-    - the corpus includes `123 456`, `123-456`, `12 34 56`, `1.2.3.4.5.6`, `X4K-9PQ`, `AB12CD`, full-width digits and scheme-less links.
+    - the corpus includes `123 456`, `123-456`, `12 34 56`, `1.2.3.4.5.6`, `X4K-9PQ`, `AB12CD`, full-width digits, random letter-only codes (`[A-Z]{3}-[A-Z]{3}`, `[A-Z]{6}`, `[A-Z]{4}-[A-Z]{4}`, lower-case `word-word-word`) and scheme-less links.
 - **`seed.ts`:** `createSeed({ snapshot })` → `{ databases: ['agent-identity-qa'], seedPane({ db }) }`. It runs `ensureTable(localClient(db), db.tableName)`, then batch-writes in chunks of 25, retrying `UnprocessedItems` with backoff and failing after a bounded number of attempts.
   - `ensureTable` is imported from `@agent-identity/api`, which exports it along with `TABLE_KEYS`, so the seed and the dev server share the schema code.
   - **Known limitation:** the seed runs in the harness, so it creates the pane table with the harness checkout's `ensureTable` (the schema from `main`, normally). The pane's own dev server starts afterwards, and its `ensureTable` is a no-op on an existing table. A PR that changes the key schema therefore runs against the old schema, and its QA needs the pane table recreated with the PR's schema. The harness doesn't do that yet.

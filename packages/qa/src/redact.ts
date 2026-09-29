@@ -56,29 +56,39 @@ const EMAIL_KEEP = [
 export const REDACTED_TEXT = "[redacted for QA]";
 export const MASK = "••••";
 
-/** Any Unicode number: decimal digits (\p{Nd}, full-width ones included)
- *  and the rest of \p{N} (superscript, circled…). */
-const NUMBER = /\p{N}/u;
-/** A host, path, address or link: `/`, `@`, or a `.` followed by a letter. */
-const HOST_OR_PATH = /[/@]|\.\p{L}/u;
-const LINK = /https?:\/\/|www\./iu;
+/** A plain word: lower-case letters, optionally after one capital and with
+ *  one inner apostrophe (`Welcome`, `don't`), in optional quotes or brackets
+ *  and with optional trailing punctuation (`world.`, `(optional)`). */
+const PLAIN_WORD = /^[("'“‘]*\p{Lu}?\p{Ll}+(?:['’]\p{Ll}+)?[)"'”’.,:;!?]*$/u;
+/** A capital letter on its own (`I`, `A`). */
+const SINGLE_CAPITAL = /^\p{Lu}$/u;
+/** No letter and no number at all (`—`, `&`, `-`). */
+const PUNCTUATION_ONLY = /^[^\p{L}\p{N}]+$/u;
 
-/** A token a login code or a magic link could hide in. It is checked as
- *  written and in its NFKC form, so full-width `／`, `＠` and `．` count too. */
-function isSensitiveToken(token: string): boolean {
-  return [token, token.normalize("NFKC")].some((t) => NUMBER.test(t) || HOST_OR_PATH.test(t) || LINK.test(t));
+/** A token a pane may show. An allowlist: a login code can't be told apart
+ *  from other text (123 456, X4K-9PQ, QWERTY, dog-cat-fish, １２３…), so
+ *  anything that isn't plainly a word is masked. It's checked in its NFKC
+ *  form, so full-width and other compatibility forms count as what they
+ *  stand for (`１２３` is a number, `ｃｏｄｅ` a word). */
+function isPlainToken(token: string): boolean {
+  const t = token.normalize("NFKC");
+  return PLAIN_WORD.test(t) || SINGLE_CAPITAL.test(t) || PUNCTUATION_ONLY.test(t);
 }
 
 /** Subjects stay readable, but a login code or a magic link in one must not
- *  reach the pane. Every whitespace-separated token with a digit, or that
- *  looks like a host, path or link, becomes ••••; plain words and the
- *  spacing stay. It loses some fidelity (`PR #12` → `PR ••••`), on purpose:
- *  codes come in too many formats (123 456, X4K-9PQ, １２３…) to pick out. */
+ *  reach the pane. Every whitespace-separated token that isn't a plain word
+ *  (see isPlainToken) becomes ••••; plain words and the spacing stay. It
+ *  loses fidelity on purpose: numbers, acronyms and mixed case go too
+ *  (`PR #12 merged` → `•••• •••• merged`, `[GitHub]` → `••••`).
+ *
+ *  Known gap: a code that is a single lower-case or capitalised word
+ *  (`kxqprt`) passes, since it can't be told from a word without a
+ *  dictionary. */
 export function maskSubject(subject: string): string {
   // With a capture group, split keeps the whitespace at the odd indexes.
   return subject
     .split(/(\s+)/u)
-    .map((part, i) => (i % 2 === 0 && part && isSensitiveToken(part) ? MASK : part))
+    .map((part, i) => (i % 2 === 0 && part && !isPlainToken(part) ? MASK : part))
     .join("");
 }
 
