@@ -26,8 +26,23 @@ describe("createSeed", () => {
   });
 
   it("creates the pane table from the shared schema before writing", async () => {
-    doc.on(BatchWriteCommand).resolves({});
-    await createSeed({ snapshot: async () => items(1) }).seedPane({ paneRef, db, databases: ["agent-identity-qa"] });
+    // One log across both mocked clients, in the order the calls were made.
+    const calls: string[] = [];
+    raw.on(DescribeTableCommand).callsFake(async () => {
+      calls.push("DescribeTable");
+      throw new ResourceNotFoundException({ message: "no table", $metadata: {} });
+    });
+    raw.on(CreateTableCommand).callsFake(async () => {
+      calls.push("CreateTable");
+      return {};
+    });
+    doc.on(BatchWriteCommand).callsFake(async () => {
+      calls.push("BatchWrite");
+      return {};
+    });
+    await createSeed({ snapshot: async () => items(30) }).seedPane({ paneRef, db, databases: ["agent-identity-qa"] });
+    expect(calls).toEqual(["DescribeTable", "CreateTable", "BatchWrite", "BatchWrite"]);
+
     const create = raw.commandCalls(CreateTableCommand)[0].args[0].input;
     expect(create.TableName).toBe("agent-identity-qa");
     expect(create.KeySchema).toEqual([
