@@ -25,14 +25,17 @@ vi.mock("./snapshot.js", async (importOriginal) => {
 
 const JAVA = "/jdk/bin/java";
 
-function setup(extra: string[] = [], onSnapshot?: (snapshot: Snapshot) => void) {
+function setup(extra: string[] = [], { onSnapshot, verifyInstall }: {
+  onSnapshot?: (snapshot: Snapshot) => void;
+  verifyInstall?: () => Promise<void>;
+} = {}) {
   const dir = mkdtempSync(join(tmpdir(), "qa-adapters-"));
   const envFile = join(dir, ".env.qa");
   writeFileSync(envFile, ["GITHUB_QA_TOKEN=test-token", "QA_MAIL_DOMAIN=mail.example.test", ...extra].join("\n"));
   const cfg = loadQaConfig(envFile);
   const cacheDir = join(dir, "cache");
   const github = { prInfo: vi.fn(), authorPermission: vi.fn(async () => "read") };
-  const qa = createQaAdapters({ cfg, github: github as never, cacheDir, java: JAVA, onSnapshot });
+  const qa = createQaAdapters({ cfg, github: github as never, cacheDir, java: JAVA, onSnapshot, verifyInstall });
   return { cfg, cacheDir, github, ...qa };
 }
 
@@ -128,6 +131,61 @@ describe("provisioner", () => {
     });
   });
 
+  describe("the DynamoDB Local check before each pane's emulator", () => {
+    // A stand-in for the process provisioner, so nothing is spawned.
+    const fakeProcesses = () => ({
+      provisionDatabase: vi.fn(async () => ({ dsn: "http://127.0.0.1:40000", db: {} })),
+      reserveServices: vi.fn(async () => ({})),
+      launchServices: vi.fn(async () => {}),
+      waitHealthy: vi.fn(async () => {}),
+      teardown: vi.fn(async () => {}),
+    });
+    const args = { paneRef: { role: "pr" as const }, databases: ["agent-identity-qa"] };
+
+    it("re-checks the install every time, before the emulator starts", async () => {
+      const processes = fakeProcesses();
+      vi.mocked(createProcessProvisioner).mockReturnValueOnce(processes);
+      const order: string[] = [];
+      const verifyInstall = vi.fn(async () => { order.push("verify"); });
+      processes.provisionDatabase.mockImplementation(async () => {
+        order.push("start");
+        return { dsn: "http://127.0.0.1:40000", db: {} };
+      });
+      const { adapters } = setup([], { verifyInstall });
+      expect(await adapters.provisioner.provisionDatabase(args)).toEqual({ dsn: "http://127.0.0.1:40000", db: {} });
+      await adapters.provisioner.provisionDatabase(args);
+      expect(order).toEqual(["verify", "start", "verify", "start"]);
+      expect(processes.provisionDatabase).toHaveBeenCalledWith(args);
+    });
+
+    it("starts nothing when the install has changed", async () => {
+      const processes = fakeProcesses();
+      vi.mocked(createProcessProvisioner).mockReturnValueOnce(processes);
+      const verifyInstall = vi.fn(async () => { throw new Error("DynamoDBLocal.jar does not match its pinned checksum: run pnpm qa:setup"); });
+      const { adapters } = setup([], { verifyInstall });
+      await expect(adapters.provisioner.provisionDatabase(args)).rejects.toThrow(/pinned checksum/);
+      expect(processes.provisionDatabase).not.toHaveBeenCalled();
+    });
+
+    it("by default checks the install under the cache against the pinned files", async () => {
+      const processes = fakeProcesses();
+      vi.mocked(createProcessProvisioner).mockReturnValueOnce(processes);
+      const { adapters, cacheDir } = setup();
+      await expect(adapters.provisioner.provisionDatabase(args))
+        .rejects.toThrow(`DynamoDB Local is not installed in ${join(cacheDir, "dynamodb-local")}: run pnpm qa:setup`);
+      expect(processes.provisionDatabase).not.toHaveBeenCalled();
+    });
+
+    it("passes every other provisioner call straight through", () => {
+      const processes = fakeProcesses();
+      vi.mocked(createProcessProvisioner).mockReturnValueOnce(processes);
+      const { adapters } = setup([], { verifyInstall: async () => {} });
+      expect(adapters.provisioner.launchServices).toBe(processes.launchServices);
+      expect(adapters.provisioner.teardown).toBe(processes.teardown);
+      expect(adapters.provisioner.waitHealthy).toBe(processes.waitHealthy);
+    });
+  });
+
   it("counts a pane healthy only once /ui/ answers 200", () => {
     setup();
     const opts = vi.mocked(createProcessProvisioner).mock.calls[0][0];
@@ -154,7 +212,7 @@ describe("seed, envTransform, auth and the base env", () => {
 
   it("hands every loaded snapshot, with its drop report, to onSnapshot", () => {
     const onSnapshot = vi.fn();
-    setup([], onSnapshot);
+    setup([], { onSnapshot });
     expect(vi.mocked(createSnapshotLoader).mock.calls[0][0].onLoaded).toBe(onSnapshot);
   });
 

@@ -30,7 +30,8 @@ const cfg = await check("config", () => loadQaConfig(envFile), `create or fix ${
 const cacheDir = qaCacheDir();
 const java = await check("java", () => javaBinary());
 await check("firewall", () => assertJavaInboundBlocked(java, { allowUnfirewalled: allowUnfirewalled(cfg.env, process.env) }));
-// Also re-hashes DynamoDBLocal.jar against the checksum qa:setup recorded.
+// Re-hashes every DynamoDB Local file against the pins in source, and
+// refuses any extra file; the provisioner checks again before each pane.
 await check("DynamoDB Local", () => assertInstalled(ddbLocalHome(cacheDir)));
 
 const github = createGithub({

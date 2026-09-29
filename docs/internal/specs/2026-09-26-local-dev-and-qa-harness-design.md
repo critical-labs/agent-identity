@@ -52,7 +52,11 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   The GitHub token must be able to comment and label on this repo. It's the reviewer's token, **not** the agent's, since the agent is read-only.
 - **`dynamodb-local.ts`:** the `database` plugin for `createProcessProvisioner`, plus install helpers.
   - The home is `${cacheDir}/dynamodb-local`, holding the extracted tarball. `DDB_LOCAL_SHA256` pins the tarball checksum, and `pnpm qa:setup` refuses a download that doesn't match.
-  - The install marker (`.sha256`, written last) records both the tarball pin and the SHA-256 of the extracted `DynamoDBLocal.jar`. `checkInstall(home, { sha256, fs, hashFile })` re-hashes the jar on every call; `pnpm qa` refuses to start when it no longer matches, or when the marker predates the jar checksum, and `pnpm qa:setup` reinstalls in either case. `fs` and `hashFile` are injectable for tests. The libraries in `DynamoDBLocal_lib` aren't hashed.
+  - **`DDB_LOCAL_FILES`** (`dynamodb-local-files.ts`) pins, in source, the SHA-256 of every file the pinned tarball extracts, by relative path: the jar, every `DynamoDBLocal_lib` jar its manifest's `Class-Path` names, and the native sqlite4java libraries loaded through `-Djava.library.path`. It is bumped together with `DDB_LOCAL_SHA256`. (Revised after review: the first version hashed only the jar, against a checksum stored next to it in the install marker, and only at `pnpm qa` start. Whoever could replace the jar could rewrite that record too, the libraries were never checked, and a file changed during a session ran unchecked in the next pane.)
+  - The install marker (`.sha256`, written last) records the tarball pin and marks the install complete; it vouches for nothing else.
+  - `checkInstall(home, { sha256, files, hashFile })` passes only when the marker names the pinned tarball and the home holds exactly the files in `DDB_LOCAL_FILES`, each re-hashed and matching. Any other file or directory is refused, since the jar's `Class-Path` includes `.` (the home itself) and `log4j2.xml`, and so is anything that isn't a plain file or directory, such as a symlink. `files` and `hashFile` are injectable for tests.
+  - It runs at `pnpm qa` start and again before each pane's emulator starts: `createQaAdapters` wraps the provisioner's `provisionDatabase` with it, because `database.command` is synchronous. A pane's code runs as the reviewer's user and could change the home during a session. `pnpm qa:setup` reinstalls whenever the check fails. A same-user process could still swap a file between the check and Java reading it; the check catches a tree changed at rest, not that race.
+  - `installDynamoDbLocal` checks the extracted tree against `DDB_LOCAL_FILES` before it replaces the old install, so a pin bumped without its manifest fails at setup.
   - `javaBinary()` resolves the **real** binary (`$(/usr/libexec/java_home)/bin/java` on macOS, rather than the `/usr/bin/java` stub, so the firewall rule and the process agree). It requires Java 17 or later.
   - `command({ port })` → `{ cmd: javaBinary, args: ['-Djava.library.path=<home>/DynamoDBLocal_lib', '-jar', '<home>/DynamoDBLocal.jar', '-inMemory', '-sharedDb', '-disableTelemetry', '-port', String(port)], cwd: home }`.
   - `ready({ port, signal })` polls `ListTables` with a short per-call timeout until it succeeds or the signal aborts.
@@ -108,7 +112,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   1. Mint `randomBytes(32).toString('hex')`.
   2. `PutItem` `{ PK: 'VIEWER#' + sha256hex(key), SK: 'VIEWER', label: 'qa', createdAt }` into the pane table via `localClient(db)`. This must be the same hash scheme as `AgentsRepo.verifyViewerKey`; a test asserts it round-trips through the real repo.
   3. Return `{ landingUrl: \`${pane.publicOrigin}/ui/?api=${encodeURIComponent(pane.publicOrigin)}#key=${key}\` }`. The harness appends `&qa=…` to the fragment, and the dashboard reads `#key` with `URLSearchParams`.
-- **`adapters.ts`:** `createQaAdapters({ cfg, github, cacheDir, java })` → `{ adapters, readBaseEnv }` composes everything. `java` is the binary `javaBinary()` resolved (the one the firewall check passed), because the provisioner calls `database.command` synchronously while resolving Java is async:
+- **`adapters.ts`:** `createQaAdapters({ cfg, github, cacheDir, java, onSnapshot?, verifyInstall? })` → `{ adapters, readBaseEnv }` composes everything. `java` is the binary `javaBinary()` resolved (the one the firewall check passed), because the provisioner calls `database.command` synchronously while resolving Java is async:
   - **build:** `createWorktreeBuild` with:
     - `repo`, `cacheDir: <cache>/build`, `github`, `baseRef`;
     - `trust: { logins: <QA_TRUSTED_LOGINS> }` (the other trust defaults stay: associations plus `requirePush`, and forks allowed);
@@ -118,15 +122,17 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
     - `stateDir: <cache>/state` and `database: <dynamodb-local plugin>`;
     - `command: ({ ref, port }) => ({ cmd: join(ref, 'node_modules/.bin/tsx'), args: ['packages/api/src/dev.ts'], cwd: ref })`. This is direct, never through pnpm, per the launch contract.
     - `healthPath: '/ui/'` and `healthy: s => s === 200`.
+
+    Its `provisionDatabase` is wrapped to run `verifyInstall` first (by default `assertInstalled` on the DynamoDB Local home), so no pane's emulator starts from a changed install. Every other provisioner method passes straight through.
   - **seed, envTransform, auth:** from the modules above.
   - **`readBaseEnv`:** `MAIL_DOMAIN`, `PUBLIC_REPOS` and `AUTO_CAPABILITIES` from the config.
 - **`serve.ts`:** the `pnpm qa` entry.
-  1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install, re-hashing the jar. Each failure prints how to fix it and exits non-zero.
+  1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install against `DDB_LOCAL_FILES`. Each failure prints how to fix it and exits non-zero.
   2. Create the GitHub client with qa-conductor's `createGithub` and the configured labels.
   3. Start the conductor, and on SIGINT, SIGTERM or SIGHUP `await shutdown()`.
   4. Print the harness URL.
   5. When the first pane's seed loads the snapshot, log one line with the kept count and the drop report (dropped items per shape, and unlisted attributes dropped from kept items).
-- **`setup.ts`:** the `pnpm qa:setup` entry. Unless `checkInstall` passes, it downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache and records the jar's checksum. It then prints the firewall commands if the rule is missing.
+- **`setup.ts`:** the `pnpm qa:setup` entry. Unless `checkInstall` passes, it downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache, checks every file against `DDB_LOCAL_FILES` and writes the marker. It then prints the firewall commands if the rule is missing.
 - **`qa-conductor.d.ts`:** minimal ambient module declarations for the qa-conductor specifiers used, since qa-conductor ships plain JS. This keeps the root `tsc --noEmit` green.
 - **Root scripts:** `"qa": "tsx packages/qa/src/serve.ts"` and `"qa:setup": "tsx packages/qa/src/setup.ts"`. `.env.qa` is gitignored.
 - **README:** a "Side-by-side PR QA" section covering setup (including the jar checksum), the firewall step, `.env.qa` (including `QA_AWS_REGION`), `pnpm qa`, the trust model (write access or `QA_TRUSTED_LOGINS`, and the caveat that logins can change hands), what the redaction keeps and drops, and the table-schema limitation.
@@ -140,7 +146,7 @@ Add dependencies with `npx pnpm@9.15.9`. The lockfile diff must contain only the
 - The trust gate (in qa-conductor) is the boundary: write access, or listing in `QA_TRUSTED_LOGINS`, plus a head in this repo or the author's own fork.
 - `trust.logins` is keyed on GitHub logins, which can be renamed and later registered by someone else. The README says to keep the list short and review it; write access remains the default gate.
 - Installs skip scripts and pnpmfiles.
-- Panes run with only `PATH` plus their declared env, and bind to loopback. DynamoDB Local is covered by the enforced firewall rule. Its tarball is checksum-pinned, and its jar is re-hashed against the install's record at every start.
+- Panes run with only `PATH` plus their declared env, and bind to loopback. DynamoDB Local is covered by the enforced firewall rule. Its tarball is checksum-pinned, and every file it extracts is pinned in source and re-checked, with no extra file allowed, at `pnpm qa` start and before each pane's emulator starts.
 - Real AWS credentials exist only in the harness process, for one read-only Scan. The snapshot is redacted before it's written anywhere and is never persisted.
 
 ## Testing
@@ -154,7 +160,7 @@ Add dependencies with `npx pnpm@9.15.9`. The lockfile diff must contain only the
   - the snapshot table lookup and pagination;
   - the firewall output parser;
   - the DynamoDB Local command, ready check and handle;
-  - the setup checksum check, and the jar checksum recorded at setup and re-checked at start (with injected fs and hash);
+  - the setup checksum check, and the install check against a pinned manifest: changed, missing, extra and symlinked files, a rewritten marker, and the check before each pane's emulator (on real temp trees, with an injected manifest and hash);
   - the adapter composition (trust logins, install command, launch command).
 - **C2 end-to-end (manual):** boot the C2 PR itself (by `critical-agent-zero`, from its fork) against `main`, then:
   - check that both dashboards list the real agents and that mail shows no bodies or links;

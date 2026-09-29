@@ -1,14 +1,18 @@
 // DynamoDB Local (the official emulator, a Java program) as the per-pane
 // database for qa-conductor's process provisioner, plus the helpers that
-// install it once (`pnpm qa:setup`) and check the install (`pnpm qa`).
+// install it once (`pnpm qa:setup`) and check the install (`pnpm qa`, and
+// before each pane's emulator starts).
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
 import { constants, createReadStream } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { access, lstat, mkdir, mkdtemp, readdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
 import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import type { ProcessDatabase } from "@critical-labs/qa-conductor/adapters/provisioner-process";
+import { DDB_LOCAL_FILES } from "./dynamodb-local-files.js";
+
+export { DDB_LOCAL_FILES };
 
 /** Every pane's table. The name is local to each pane's own emulator. */
 export const QA_TABLE = "agent-identity-qa";
@@ -22,13 +26,15 @@ export const LOCAL_CREDENTIALS = { accessKeyId: "local", secretAccessKey: "local
  *  setup refuses it until the pin is bumped (after checking the .sha256 AWS
  *  publishes next to the tarball). */
 export const DDB_LOCAL_URL = "https://d1ni2b6xgvw0s0.cloudfront.net/v2.x/dynamodb_local_latest.tar.gz";
-/** DynamoDB Local 3.3.1. */
+/** DynamoDB Local 3.3.1. Bump DDB_LOCAL_FILES (dynamodb-local-files.ts),
+ *  the checksum of every file it extracts, together with it. */
 export const DDB_LOCAL_SHA256 = "f80bcec477f85f57e2c77f8d54aa6b672a8403fceff0c450560aee1cf6c21163";
 
 const JAR = "DynamoDBLocal.jar";
 const LIB = "DynamoDBLocal_lib";
-/** Written last by an install: the checksum of the tarball it came from and
- *  of the jar it extracted (see formatMarker). */
+/** Written last by an install: the checksum of the tarball it came from (see
+ *  formatMarker). It only marks the install complete; what Java runs is
+ *  checked against DDB_LOCAL_FILES, pinned in source. */
 const MARKER = ".sha256";
 const JAVA_HOME_TOOL = "/usr/libexec/java_home";
 const MIN_JAVA = 17;
@@ -203,7 +209,8 @@ export function verifySha256(data: Uint8Array, expected: string): void {
     throw new Error(
       `DynamoDB Local checksum mismatch: expected ${expected}, got ${got}. ` +
       `AWS may have published a new release at ${DDB_LOCAL_URL}: check the .sha256 AWS publishes ` +
-      "next to it, then bump DDB_LOCAL_SHA256 in packages/qa/src/dynamodb-local.ts.",
+      "next to it, then bump DDB_LOCAL_SHA256 in packages/qa/src/dynamodb-local.ts and, with it, " +
+      "DDB_LOCAL_FILES in packages/qa/src/dynamodb-local-files.ts.",
     );
   }
 }
@@ -215,71 +222,123 @@ export async function sha256File(path: string): Promise<string> {
   return hash.digest("hex");
 }
 
-/** What an install records: the tarball's checksum (the pin it passed) and
- *  the extracted jar's, which `pnpm qa` re-checks before every start. */
+/** What an install records: the checksum of the tarball it came from (the
+ *  pin it passed). Written last, so it also marks the install complete. */
 export interface InstallMarker {
   tarball: string;
-  jar: string;
 }
 
-export const formatMarker = ({ tarball, jar }: InstallMarker): string => `tarball ${tarball}\njar ${jar}\n`;
+export const formatMarker = ({ tarball }: InstallMarker): string => `tarball ${tarball}\n`;
 
-/** The marker's two checksums, or null when either is missing or malformed
- *  (as in a marker written before the jar's checksum was recorded). */
+/** The marker's tarball checksum, or null when it has none (as in a marker
+ *  from before this format). Other lines, such as the `jar` line earlier
+ *  installs wrote, are ignored: the files are checked against the source. */
 export function parseMarker(text: string): InstallMarker | null {
-  const fields = new Map<string, string>();
   for (const line of text.split("\n")) {
-    const m = /^(tarball|jar) ([0-9a-f]{64})$/.exec(line.trim());
-    if (m) fields.set(m[1], m[2]);
+    const m = /^tarball ([0-9a-f]{64})$/.exec(line.trim());
+    if (m) return { tarball: m[1] };
   }
-  const tarball = fields.get("tarball");
-  const jar = fields.get("jar");
-  return tarball && jar ? { tarball, jar } : null;
+  return null;
 }
 
-/** The file access checkInstall needs, injectable for tests. */
-export interface InstallFs {
-  readFile(path: string, encoding: "utf8"): Promise<string>;
-  access(path: string): Promise<void>;
+/** path → SHA-256, relative to the install's home (see DDB_LOCAL_FILES). */
+export type FileManifest = Readonly<Record<string, string>>;
+
+/** The first way the tree under `home` differs from `files`, or null when
+ *  it matches exactly. Java's classpath includes the home itself (the jar's
+ *  Class-Path lists `.`) and it loads native libraries from
+ *  DynamoDBLocal_lib, so any other file is refused, not only a changed one.
+ *  So is anything that isn't a plain file or directory: a symlink could be
+ *  pointed elsewhere after the check. `skip` names top-level entries that
+ *  aren't DynamoDB Local's (the install marker). Every file is re-hashed. */
+export async function findTreeProblem(home: string, files: FileManifest, {
+  hashFile = sha256File,
+  skip = [],
+}: {
+  hashFile?: (path: string) => Promise<string>;
+  skip?: string[];
+} = {}): Promise<string | null> {
+  // The directories the files live in, relative to home ("" is home).
+  const dirs = new Set([""]);
+  for (const rel of Object.keys(files)) {
+    const parts = rel.split("/");
+    for (let i = 1; i < parts.length; i++) dirs.add(parts.slice(0, i).join("/"));
+  }
+
+  const found = new Set<string>();
+  const walk = async (rel: string): Promise<string | null> => {
+    const path = rel ? join(home, rel) : home;
+    const st = await lstat(path);
+    if (st.isDirectory()) {
+      if (!dirs.has(rel)) return `${path} is not part of DynamoDB Local`;
+      for (const name of (await readdir(path)).sort()) {
+        if (!rel && skip.includes(name)) continue;
+        const problem = await walk(rel ? `${rel}/${name}` : name);
+        if (problem) return problem;
+      }
+      return null;
+    }
+    if (!st.isFile()) return `${path} is not a regular file`;
+    if (!Object.hasOwn(files, rel)) return `${path} is not part of DynamoDB Local`;
+    found.add(rel);
+    return null;
+  };
+  const extra = await walk("");
+  if (extra) return extra;
+
+  const expected = Object.keys(files).sort();
+  const missing = expected.find((rel) => !found.has(rel));
+  if (missing) return `${join(home, missing)} is missing`;
+  const hashes = await Promise.all(expected.map((rel) => hashFile(join(home, rel))));
+  const changed = expected.findIndex((rel, i) => hashes[i] !== files[rel]);
+  if (changed !== -1) {
+    const rel = expected[changed];
+    return `${join(home, rel)} does not match its pinned checksum (expected ${files[rel]}, got ${hashes[changed]})`;
+  }
+  return null;
 }
 
 export interface InstallCheckOptions {
+  /** The tarball pin the marker must name. */
   sha256?: string;
-  fs?: InstallFs;
+  /** Every file the pinned tarball extracts, with its checksum. */
+  files?: FileManifest;
   hashFile?: (path: string) => Promise<string>;
 }
 
 export type InstallState = { ok: true } | { ok: false; reason: string };
 
-/** Installed = the jar and its libraries are present, the marker says they
- *  came from the pinned tarball, and the jar still hashes to what the
- *  install recorded. The jar is re-hashed on every call, so a jar replaced
- *  after `pnpm qa:setup` is caught before Java runs it. */
+/** Installed = the marker says the install came from the pinned tarball,
+ *  and the home holds exactly the files that tarball extracts, each with
+ *  the checksum pinned in source (DDB_LOCAL_FILES), and nothing else. The
+ *  reference lives in source, not next to the files, so rewriting the
+ *  marker can't vouch for a changed file. Every file is re-hashed on every
+ *  call: `pnpm qa` checks at start, and the provisioner again before each
+ *  pane's emulator starts (see createQaAdapters). A process running as the
+ *  same user could still swap a file between the check and Java reading
+ *  it; the check catches a tree changed at rest. */
 export async function checkInstall(home: string, {
   sha256 = DDB_LOCAL_SHA256,
-  fs = { readFile, access },
+  files = DDB_LOCAL_FILES,
   hashFile = sha256File,
 }: InstallCheckOptions = {}): Promise<InstallState> {
   let text: string;
   try {
-    [text] = await Promise.all([fs.readFile(join(home, MARKER), "utf8"), fs.access(join(home, JAR)), fs.access(join(home, LIB))]);
+    text = await readFile(join(home, MARKER), "utf8");
   } catch {
     return { ok: false, reason: `DynamoDB Local is not installed in ${home}` };
   }
   const marker = parseMarker(text);
-  if (!marker) return { ok: false, reason: `the DynamoDB Local install in ${home} has no checksum for ${JAR} (it predates that check)` };
+  if (!marker) return { ok: false, reason: `the DynamoDB Local install in ${home} predates the current install format` };
   if (marker.tarball !== sha256) return { ok: false, reason: `the DynamoDB Local install in ${home} is not the pinned version` };
 
-  const jarPath = join(home, JAR);
-  let jar: string;
+  let problem: string | null;
   try {
-    jar = await hashFile(jarPath);
+    problem = await findTreeProblem(home, files, { hashFile, skip: [MARKER] });
   } catch (err) {
-    return { ok: false, reason: `could not hash ${jarPath}: ${(err as Error).message}` };
+    return { ok: false, reason: `could not check the DynamoDB Local install in ${home}: ${(err as Error).message}` };
   }
-  if (jar !== marker.jar) {
-    return { ok: false, reason: `${jarPath} has changed since pnpm qa:setup installed it (recorded ${marker.jar}, now ${jar})` };
-  }
+  if (problem) return { ok: false, reason: `the DynamoDB Local install has changed since pnpm qa:setup: ${problem}` };
   return { ok: true };
 }
 
@@ -292,13 +351,15 @@ export async function assertInstalled(home: string, opts: InstallCheckOptions = 
   if (!state.ok) throw new Error(`${state.reason}: run pnpm qa:setup`);
 }
 
-/** Download, verify, extract, and record the tarball's and the jar's
- *  checksums. Nothing touches the disk until the tarball's checksum matches,
- *  and the new tree replaces the old one only once it's complete. */
+/** Download, verify, extract, check every extracted file against
+ *  DDB_LOCAL_FILES, and record the tarball's checksum. Nothing touches the
+ *  disk until the tarball's checksum matches, and the new tree replaces the
+ *  old one only once it's complete and checked. */
 export async function installDynamoDbLocal({
   home,
   url = DDB_LOCAL_URL,
   sha256 = DDB_LOCAL_SHA256,
+  files = DDB_LOCAL_FILES,
   fetchFn = fetch,
   execFileFn = execFileAsync,
   hashFile = sha256File,
@@ -306,6 +367,7 @@ export async function installDynamoDbLocal({
   home: string;
   url?: string;
   sha256?: string;
+  files?: FileManifest;
   fetchFn?: (url: string) => Promise<Response>;
   execFileFn?: ExecFileFn;
   hashFile?: (path: string) => Promise<string>;
@@ -324,12 +386,14 @@ export async function installDynamoDbLocal({
     await writeFile(archive, data, { mode: 0o600 });
     await mkdir(tree);
     await execFileFn("tar", ["-xzf", archive, "-C", tree]);
-    try {
-      await access(join(tree, JAR));
-    } catch {
-      throw new Error(`the DynamoDB Local tarball has no ${JAR}`);
+    const problem = await findTreeProblem(tree, files, { hashFile });
+    if (problem) {
+      throw new Error(
+        `the extracted DynamoDB Local does not match DDB_LOCAL_FILES (${problem}); ` +
+        "bump DDB_LOCAL_FILES in packages/qa/src/dynamodb-local-files.ts together with DDB_LOCAL_SHA256",
+      );
     }
-    await writeFile(join(tree, MARKER), formatMarker({ tarball: sha256, jar: await hashFile(join(tree, JAR)) }));
+    await writeFile(join(tree, MARKER), formatMarker({ tarball: sha256 }));
     await rm(home, { recursive: true, force: true });
     await rename(tree, home);
   } finally {

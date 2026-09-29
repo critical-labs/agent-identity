@@ -5,7 +5,7 @@ import { createProcessProvisioner } from "@critical-labs/qa-conductor/adapters/p
 import type { Github } from "@critical-labs/qa-conductor/github";
 import { createAuth } from "./auth.js";
 import type { QaConfig } from "./config.js";
-import { createDynamoDbLocal, ddbLocalHome } from "./dynamodb-local.js";
+import { assertInstalled, createDynamoDbLocal, ddbLocalHome } from "./dynamodb-local.js";
 import { derivePaneEnv, prodEnvFrom } from "./env.js";
 import { createSeed } from "./seed.js";
 import { createSnapshotLoader, type Snapshot } from "./snapshot.js";
@@ -25,15 +25,21 @@ const INSTALL = {
  *  Layout under `cacheDir`: `build/` (git worktrees), `state/` (the
  *  provisioner's pidfile) and `dynamodb-local/` (installed by qa:setup).
  *
- *  `onSnapshot` sees each prod snapshot, with its drop report, once. */
-export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot }: {
+ *  `onSnapshot` sees each prod snapshot, with its drop report, once.
+ *
+ *  `verifyInstall` runs before each pane's emulator starts; by default it
+ *  re-checks every DynamoDB Local file against the pins in source. */
+export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot, verifyInstall }: {
   cfg: QaConfig;
   github: Github;
   cacheDir: string;
   java: string;
   onSnapshot?: (snapshot: Snapshot) => void;
+  verifyInstall?: () => Promise<void>;
 }): { adapters: Adapters; readBaseEnv: () => Promise<Record<string, string>> } {
   const { app } = cfg;
+  const ddbHome = ddbLocalHome(cacheDir);
+  const verify = verifyInstall ?? (() => assertInstalled(ddbHome));
 
   // The trust gate is the one real boundary between a PR's code and the
   // reviewer's machine. Authors with write access pass as usual; the listed
@@ -48,9 +54,9 @@ export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot }: {
     servicesFor: (dir) => ({ api: dir }),
   });
 
-  const provisioner = createProcessProvisioner({
+  const processes = createProcessProvisioner({
     stateDir: join(cacheDir, "state"),
-    database: createDynamoDbLocal({ home: ddbLocalHome(cacheDir), java }),
+    database: createDynamoDbLocal({ home: ddbHome, java }),
     // Started directly, never through a package manager (qa-conductor's
     // launch contract). PORT and the rest come from derivePaneEnv.
     command: ({ ref }) => ({
@@ -62,6 +68,18 @@ export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot }: {
     healthPath: "/ui/",
     healthy: (status) => status === 200,
   });
+  // Java runs whatever is in the DynamoDB Local home. `pnpm qa` checked it
+  // at start, but a pane's code runs as the same user and could change it
+  // during a session, so every file is checked again before each emulator
+  // starts. (The provisioner builds the command synchronously, so the check
+  // wraps provisionDatabase.)
+  const provisioner: Adapters["provisioner"] = {
+    ...processes,
+    async provisionDatabase(args) {
+      await verify();
+      return processes.provisionDatabase(args);
+    },
+  };
 
   return {
     adapters: {
