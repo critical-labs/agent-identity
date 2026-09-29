@@ -192,6 +192,28 @@ importers:
         specifier: ^4.5.0
         version: 4.12.27
 
+  packages/qa:
+    dependencies:
+      '@agent-identity/api':
+        specifier: workspace:*
+        version: link:../api
+      '@aws-sdk/client-cloudformation':
+        specifier: 3.1079.0
+        version: 3.1079.0
+      '@aws-sdk/client-dynamodb':
+        specifier: ^3.600.0
+        version: 3.1079.0
+      '@aws-sdk/lib-dynamodb':
+        specifier: ^3.600.0
+        version: 3.1079.0(@aws-sdk/client-dynamodb@3.1079.0)
+      '@critical-labs/qa-conductor':
+        specifier: github:critical-labs/qa-conductor#v0.2.0
+        version: https://codeload.github.com/critical-labs/qa-conductor/tar.gz/27a6abb421522a1e39b430bce4389100d24fb4bc
+    devDependencies:
+      aws-sdk-client-mock:
+        specifier: ^4.0.0
+        version: 4.1.0
+
   packages/shared: {}
 
 packages:
@@ -211,6 +233,10 @@ packages:
 
   '@aws-sdk/checksums@3.1000.12':
     resolution: {integrity: sha512-RgNDWfhNRIlNEzePIRrYTNi/6q+wwRMMapojn8YVzw4ZcJRa/gxVMtUbeZARR1gmopuv6oIhMbY7J66qIQ0ynw==}
+    engines: {node: '>=20.0.0'}
+
+  '@aws-sdk/client-cloudformation@3.1079.0':
+    resolution: {integrity: sha512-07eZNnT2m9GuLnnIgwUBGVNzwFGoDoVsKvT+3cdCeLLeq+McI87QUz27ixSCOTYM1rOpPznc8v4SNvQ+fja3YA==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/client-dynamodb@3.1079.0':
@@ -312,6 +338,11 @@ packages:
   '@aws/lambda-invoke-store@0.3.0':
     resolution: {integrity: sha512-sl4Bm6yiMNYrZKkqqDFWN0UfnWhlS8ivKxrYl+6t0gCLrqr8y3B2IqZZbFRkfaVVp7C/baApyh71P+LeE1A2sQ==}
     engines: {node: '>=18.0.0'}
+
+  '@critical-labs/qa-conductor@https://codeload.github.com/critical-labs/qa-conductor/tar.gz/27a6abb421522a1e39b430bce4389100d24fb4bc':
+    resolution: {tarball: https://codeload.github.com/critical-labs/qa-conductor/tar.gz/27a6abb421522a1e39b430bce4389100d24fb4bc}
+    version: 0.2.0
+    engines: {node: '>=22'}
 
   '@esbuild/aix-ppc64@0.21.5':
     resolution: {integrity: sha512-1SDgH6ZSPTlggy1yI6+Dbkiz8xzpHJEVAlF/AM1tHPLsf5STom9rwtjE4hKAF20FfXXNTFqEYXyJNWh1GiZedQ==}
@@ -2041,6 +2072,17 @@ snapshots:
       '@smithy/types': 4.15.1
       tslib: 2.8.1
 
+  '@aws-sdk/client-cloudformation@3.1079.0':
+    dependencies:
+      '@aws-sdk/core': 3.974.27
+      '@aws-sdk/credential-provider-node': 3.972.62
+      '@aws-sdk/types': 3.973.15
+      '@smithy/core': 3.29.1
+      '@smithy/fetch-http-handler': 5.6.3
+      '@smithy/node-http-handler': 4.9.3
+      '@smithy/types': 4.15.1
+      tslib: 2.8.1
+
   '@aws-sdk/client-dynamodb@3.1079.0':
     dependencies:
       '@aws-sdk/core': 3.974.27
@@ -2255,6 +2297,8 @@ snapshots:
       tslib: 2.8.1
 
   '@aws/lambda-invoke-store@0.3.0': {}
+
+  '@critical-labs/qa-conductor@https://codeload.github.com/critical-labs/qa-conductor/tar.gz/27a6abb421522a1e39b430bce4389100d24fb4bc': {}
 
   '@esbuild/aix-ppc64@0.21.5':
     optional: true

@@ -1,0 +1,17 @@
+{
+  "name": "@agent-identity/qa",
+  "version": "0.3.0",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/adapters.ts" },
+  "dependencies": {
+    "@agent-identity/api": "workspace:*",
+    "@aws-sdk/client-cloudformation": "3.1079.0",
+    "@aws-sdk/client-dynamodb": "^3.600.0",
+    "@aws-sdk/lib-dynamodb": "^3.600.0",
+    "@critical-labs/qa-conductor": "github:critical-labs/qa-conductor#v0.2.0"
+  },
+  "devDependencies": {
+    "aws-sdk-client-mock": "^4.0.0"
+  }
+}
