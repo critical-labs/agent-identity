@@ -5,7 +5,7 @@
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { redactItem, type Item } from "./redact.js";
+import { redactItem, shapeKey, type Item } from "./redact.js";
 
 /** The physical name of the stack's table (CDK logical id `Table<hash>`). */
 export async function findTableName(cfn: CloudFormationClient, stackName: string): Promise<string> {
@@ -20,25 +20,50 @@ export async function findTableName(cfn: CloudFormationClient, stackName: string
   return tables[0].PhysicalResourceId!;
 }
 
+/** The redacted items, plus how many items were dropped per shape
+ *  (`NONCE#/SIG#` → 12; see shapeKey): key prefixes only, never values. */
+export interface Snapshot {
+  items: Item[];
+  dropped: Record<string, number>;
+}
+
+const byKey = ([a]: [string, number], [b]: [string, number]) => (a < b ? -1 : a > b ? 1 : 0);
+
 /** Scan the whole table (read-only) and keep what redactItem allows. Items
  *  are redacted page by page, so unredacted mail never accumulates. */
 export async function loadSnapshot({ stackName, cfn, ddb }: {
   stackName: string;
   cfn: CloudFormationClient;
   ddb: DynamoDBDocumentClient;
-}): Promise<Item[]> {
+}): Promise<Snapshot> {
   const TableName = await findTableName(cfn, stackName);
-  const out: Item[] = [];
+  const items: Item[] = [];
+  const dropped = new Map<string, number>();
   let ExclusiveStartKey: Record<string, unknown> | undefined;
   do {
     const page = await ddb.send(new ScanCommand({ TableName, ...(ExclusiveStartKey ? { ExclusiveStartKey } : {}) }));
     for (const item of page.Items ?? []) {
       const kept = redactItem(item);
-      if (kept) out.push(kept);
+      if (kept) {
+        items.push(kept);
+      } else {
+        const key = shapeKey(item);
+        dropped.set(key, (dropped.get(key) ?? 0) + 1);
+      }
     }
     ExclusiveStartKey = page.LastEvaluatedKey;
   } while (ExclusiveStartKey);
-  return out;
+  return { items, dropped: Object.fromEntries([...dropped].sort(byKey)) };
+}
+
+/** One log line: what the panes get, and what they don't, per shape. A new
+ *  kind of item showing up here is the cue to decide, in redact.ts, whether
+ *  panes should see it. */
+export function describeSnapshot({ items, dropped }: Snapshot): string {
+  const entries = Object.entries(dropped).sort(byKey);
+  const total = entries.reduce((sum, [, n]) => sum + n, 0);
+  const detail = total === 0 ? "none" : `${total}: ${entries.map(([key, n]) => `${key} ×${n}`).join(", ")}`;
+  return `snapshot: kept ${items.length} item(s), dropped ${detail}`;
 }
 
 /** Run `load` once and share its result. A failure isn't cached, so a later
@@ -56,13 +81,19 @@ export function memoize<T>(load: () => Promise<T>): () => Promise<T> {
 }
 
 /** The seed's snapshot: scanned on the first pane's seed, then reused by
- *  every pane until the conductor restarts. */
-export function createSnapshotLoader({ stackName }: { stackName: string }): () => Promise<Item[]> {
+ *  every pane until the conductor restarts. `onLoaded` sees each snapshot,
+ *  with its drop report, once. */
+export function createSnapshotLoader({ stackName, onLoaded }: {
+  stackName: string;
+  onLoaded?: (snapshot: Snapshot) => void;
+}): () => Promise<Item[]> {
   return memoize(async () => {
     const cfn = new CloudFormationClient({});
     const client = new DynamoDBClient({});
     try {
-      return await loadSnapshot({ stackName, cfn, ddb: DynamoDBDocumentClient.from(client) });
+      const snapshot = await loadSnapshot({ stackName, cfn, ddb: DynamoDBDocumentClient.from(client) });
+      onLoaded?.(snapshot);
+      return snapshot.items;
     } finally {
       cfn.destroy();
       client.destroy();

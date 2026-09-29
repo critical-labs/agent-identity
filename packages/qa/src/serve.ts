@@ -7,6 +7,7 @@ import { createQaAdapters } from "./adapters.js";
 import { allowUnfirewalled, loadQaConfig, qaCacheDir, qaEnvFile } from "./config.js";
 import { assertInstalled, ddbLocalHome, javaBinary } from "./dynamodb-local.js";
 import { assertJavaInboundBlocked } from "./firewall.js";
+import { describeSnapshot, type Snapshot } from "./snapshot.js";
 
 /** One preflight check: on failure, say what's wrong and how to fix it, and
  *  exit non-zero before anything starts. */
@@ -36,7 +37,10 @@ const github = createGithub({
   repo: cfg.repo,
   qaLabels: [cfg.verdictLabels.accept, cfg.verdictLabels.reject],
 });
-const { adapters, readBaseEnv } = createQaAdapters({ cfg, github, cacheDir, java });
+// Once per snapshot: what the panes get, and what was dropped per kind of
+// item (key prefixes only, never values).
+const onSnapshot = (snapshot: Snapshot) => console.log(`[qa] ${describeSnapshot(snapshot)}`);
+const { adapters, readBaseEnv } = createQaAdapters({ cfg, github, cacheDir, java, onSnapshot });
 const conductor = startConductor({ cfg, github, fsx: { readFile: (path) => readFile(path) }, adapters, readBaseEnv });
 
 // The first signal tears the panes down gracefully. A second one exits at

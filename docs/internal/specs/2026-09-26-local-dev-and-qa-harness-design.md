@@ -61,7 +61,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - On other platforms it throws "unsupported platform: bind a host firewall rule for DynamoDB Local and set QA_ALLOW_UNFIREWALLED=1". The environment variable is the explicit override.
 - **`snapshot.ts`:** `loadSnapshot({ stackName, cfn, ddb })`.
   - It gets the table's physical name from CloudFormation (`DescribeStackResources`, logical id starting `Table`), then runs a **read-only** paginated `Scan`.
-  - It returns the items after `redactItem`, holding them only in memory.
+  - It returns `{ items, dropped }`: the items after `redactItem`, held only in memory, and the drop report (see `redact.ts`). `createSnapshotLoader` hands each snapshot to an `onLoaded` callback once, which `serve.ts` uses to log `describeSnapshot`.
   - It runs once per conductor process and is memoized: the first pane's seed triggers it, and later sessions reuse it until restart. Clients use the default credential chain, which is the reviewer's AWS profile. The region comes from `QA_AWS_REGION` when set; otherwise it comes from the default chain. The prod stack's region is the deploy workflow's `AWS_REGION` variable, and the default chain may not match it.
 - **`redact.ts`:** `redactItem(item)`, a pure function returning the item to keep or `null`. **It fails closed at both levels: item shapes and email attributes are allowlists.** (Revised after review: the first version copied unknown item shapes and masked only ASCII digit runs, which let common code formats through.)
   - **Item shapes, keyed on (`PK` prefix, `SK`), matching every writer in the repo** (`api/src/db/*`, `admin/src/commands.ts`):
@@ -115,6 +115,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   2. Create the GitHub client with qa-conductor's `createGithub` and the configured labels.
   3. Start the conductor, and on SIGINT, SIGTERM or SIGHUP `await shutdown()`.
   4. Print the harness URL.
+  5. When the first pane's seed loads the snapshot, log one line with the kept count and the drop report.
 - **`setup.ts`:** the `pnpm qa:setup` entry. It downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache, and prints the firewall commands if the rule is missing.
 - **`qa-conductor.d.ts`:** minimal ambient module declarations for the qa-conductor specifiers used, since qa-conductor ships plain JS. This keeps the root `tsc --noEmit` green.
 - **Root scripts:** `"qa": "tsx packages/qa/src/serve.ts"` and `"qa:setup": "tsx packages/qa/src/setup.ts"`. `.env.qa` is gitignored.

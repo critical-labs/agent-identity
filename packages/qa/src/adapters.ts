@@ -8,7 +8,7 @@ import type { QaConfig } from "./config.js";
 import { createDynamoDbLocal, ddbLocalHome } from "./dynamodb-local.js";
 import { derivePaneEnv, prodEnvFrom } from "./env.js";
 import { createSeed } from "./seed.js";
-import { createSnapshotLoader } from "./snapshot.js";
+import { createSnapshotLoader, type Snapshot } from "./snapshot.js";
 
 /** The same pnpm major as CI. Scripts and pnpmfiles never run: installing a
  *  PR must not execute its code (or its dependencies') before the reviewer
@@ -23,12 +23,15 @@ const INSTALL = {
  *  one the firewall rule blocks.
  *
  *  Layout under `cacheDir`: `build/` (git worktrees), `state/` (the
- *  provisioner's pidfile) and `dynamodb-local/` (installed by qa:setup). */
-export function createQaAdapters({ cfg, github, cacheDir, java }: {
+ *  provisioner's pidfile) and `dynamodb-local/` (installed by qa:setup).
+ *
+ *  `onSnapshot` sees each prod snapshot, with its drop report, once. */
+export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot }: {
   cfg: QaConfig;
   github: Github;
   cacheDir: string;
   java: string;
+  onSnapshot?: (snapshot: Snapshot) => void;
 }): { adapters: Adapters; readBaseEnv: () => Promise<Record<string, string>> } {
   const { app } = cfg;
 
@@ -64,7 +67,7 @@ export function createQaAdapters({ cfg, github, cacheDir, java }: {
     adapters: {
       build,
       provisioner,
-      seed: createSeed({ snapshot: createSnapshotLoader({ stackName: app.stackName }) }),
+      seed: createSeed({ snapshot: createSnapshotLoader({ stackName: app.stackName, onLoaded: onSnapshot }) }),
       envTransform: { derivePaneEnv },
       auth: createAuth(),
     },

@@ -4,7 +4,7 @@ import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_TEXT } from "./redact.js";
-import { createSnapshotLoader, findTableName, loadSnapshot, memoize } from "./snapshot.js";
+import { createSnapshotLoader, describeSnapshot, findTableName, loadSnapshot, memoize } from "./snapshot.js";
 
 const cfnMock = mockClient(CloudFormationClient);
 const docMock = mockClient(DynamoDBDocumentClient);
@@ -48,7 +48,7 @@ describe("loadSnapshot", () => {
     docMock.on(ScanCommand)
       .resolvesOnce({ Items: [agent, viewer], LastEvaluatedKey: { PK: "VIEWER#abc", SK: "VIEWER" } })
       .resolvesOnce({ Items: [email] });
-    const items = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
+    const { items, dropped } = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
 
     const scans = docMock.commandCalls(ScanCommand).map((c) => c.args[0].input);
     expect(scans).toEqual([
@@ -62,11 +62,39 @@ describe("loadSnapshot", () => {
       agent,
       { PK: "MAILBOX#482913", SK: "EMAIL#01J9", subject: "Code ••••", text: REDACTED_TEXT, links: [] },
     ]);
+    expect(dropped).toEqual({ "VIEWER#/VIEWER": 1 });
+  });
+
+  it("counts what it drops per PK and SK prefix, never by value", async () => {
+    docMock.on(ScanCommand)
+      .resolvesOnce({ Items: [agent, { PK: "NONCE#fp1", SK: "SIG#c2lnMQ" }, { PK: "FLEET#9f86d081", SK: "FLEET" }], LastEvaluatedKey: { PK: "x", SK: "y" } })
+      .resolvesOnce({ Items: [
+        { PK: "NONCE#fp2", SK: "SIG#c2lnMg" },
+        { PK: "MAILBOX#482913", SK: "META", note: "n" },
+        { PK: "OTP#482913", SK: "731904", code: "731904" },
+        { PK: "AGENT#fp1", SK: "SESSION#1", token: "t0k3n" },
+      ] });
+    const { items, dropped } = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
+    expect(items).toEqual([agent]);
+    expect(dropped).toEqual({ "AGENT#/SESSION#": 1, "FLEET#/FLEET": 1, "MAILBOX#/META": 1, "NONCE#/SIG#": 2, "OTP#/?": 1 });
+    const report = JSON.stringify(dropped);
+    for (const value of ["fp1", "fp2", "c2lnMQ", "9f86d081", "482913", "731904", "t0k3n"]) expect(report).not.toContain(value);
   });
 
   it("handles an empty table", async () => {
     docMock.on(ScanCommand).resolves({});
-    expect(await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb })).toEqual([]);
+    expect(await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb })).toEqual({ items: [], dropped: {} });
+  });
+});
+
+describe("describeSnapshot", () => {
+  it("says how much was kept, and what was dropped per shape, sorted", () => {
+    expect(describeSnapshot({ items: [{ PK: "AGENT#a" }, { PK: "AGENT#b" }], dropped: { "NONCE#/SIG#": 2, "FLEET#/FLEET": 1 } }))
+      .toBe("snapshot: kept 2 item(s), dropped 3: FLEET#/FLEET ×1, NONCE#/SIG# ×2");
+  });
+
+  it("says when nothing was dropped", () => {
+    expect(describeSnapshot({ items: [], dropped: {} })).toBe("snapshot: kept 0 item(s), dropped none");
   });
 });
 
@@ -97,6 +125,20 @@ describe("createSnapshotLoader", () => {
     expect(await snapshot()).toEqual([agent()]);
     expect(cfnMock.commandCalls(DescribeStackResourcesCommand)).toHaveLength(1);
     expect(docMock.commandCalls(ScanCommand)).toHaveLength(1);
+  });
+
+  it("hands each snapshot, with its drop report, to onLoaded once", async () => {
+    docMock.on(ScanCommand)
+      .rejectsOnce(new Error("ExpiredToken"))
+      .resolves({ Items: [agent(), { PK: "VIEWER#abc", SK: "VIEWER" }] });
+    const onLoaded = vi.fn();
+    const snapshot = createSnapshotLoader({ stackName: "AgentIdentity", onLoaded });
+    await expect(snapshot()).rejects.toThrow("ExpiredToken");
+    expect(onLoaded).not.toHaveBeenCalled();
+    await snapshot();
+    await snapshot();
+    expect(onLoaded).toHaveBeenCalledOnce();
+    expect(onLoaded).toHaveBeenCalledWith({ items: [agent()], dropped: { "VIEWER#/VIEWER": 1 } });
   });
 
   function agent() {

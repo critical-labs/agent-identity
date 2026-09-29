@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createQaAdapters } from "./adapters.js";
 import { loadQaConfig } from "./config.js";
 import { derivePaneEnv } from "./env.js";
-import { createSnapshotLoader } from "./snapshot.js";
+import { createSnapshotLoader, type Snapshot } from "./snapshot.js";
 
 // The real qa-conductor factories, wrapped so the options they get can be read.
 vi.mock("@critical-labs/qa-conductor/adapters/build-worktree", async (importOriginal) => {
@@ -25,14 +25,14 @@ vi.mock("./snapshot.js", async (importOriginal) => {
 
 const JAVA = "/jdk/bin/java";
 
-function setup(extra: string[] = []) {
+function setup(extra: string[] = [], onSnapshot?: (snapshot: Snapshot) => void) {
   const dir = mkdtempSync(join(tmpdir(), "qa-adapters-"));
   const envFile = join(dir, ".env.qa");
   writeFileSync(envFile, ["GITHUB_QA_TOKEN=test-token", "QA_MAIL_DOMAIN=mail.example.test", ...extra].join("\n"));
   const cfg = loadQaConfig(envFile);
   const cacheDir = join(dir, "cache");
   const github = { prInfo: vi.fn(), authorPermission: vi.fn(async () => "read") };
-  const qa = createQaAdapters({ cfg, github: github as never, cacheDir, java: JAVA });
+  const qa = createQaAdapters({ cfg, github: github as never, cacheDir, java: JAVA, onSnapshot });
   return { cfg, cacheDir, github, ...qa };
 }
 
@@ -141,8 +141,14 @@ describe("seed, envTransform, auth and the base env", () => {
   it("seeds from one shared snapshot of the configured stack", () => {
     const { adapters } = setup(["QA_STACK_NAME=AgentIdentityStaging"]);
     expect(createSnapshotLoader).toHaveBeenCalledOnce();
-    expect(createSnapshotLoader).toHaveBeenCalledWith({ stackName: "AgentIdentityStaging" });
+    expect(vi.mocked(createSnapshotLoader).mock.calls[0][0].stackName).toBe("AgentIdentityStaging");
     expect(adapters.seed.databases).toEqual(["agent-identity-qa"]);
+  });
+
+  it("hands every loaded snapshot, with its drop report, to onSnapshot", () => {
+    const onSnapshot = vi.fn();
+    setup([], onSnapshot);
+    expect(vi.mocked(createSnapshotLoader).mock.calls[0][0].onLoaded).toBe(onSnapshot);
   });
 
   it("uses the pane env transform and the viewer-key bootstrap", () => {
