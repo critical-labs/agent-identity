@@ -6,7 +6,8 @@
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
-import { redactItem, shapeKey, unlistedAttributes, type Item } from "./redact.js";
+import { isMailDomain } from "./config.js";
+import { redactItem, shapeKey, shapeOf, unlistedAttributes, type Item } from "./redact.js";
 
 /** The physical name of the stack's table (CDK logical id `Table<hash>`). */
 export async function findTableName(cfn: CloudFormationClient, stackName: string): Promise<string> {
@@ -30,12 +31,66 @@ export interface Snapshot {
   items: Item[];
   dropped: Record<string, number>;
   droppedAttributes: Record<string, number>;
+  /** The fleet's mail domain, derived from the agents' addresses (see
+   *  deriveMailDomain), or null. It feeds the panes' MAIL_DOMAIN and is
+   *  never logged: logs may be pasted publicly. */
+  mailDomain: string | null;
+  /** The derivation's counts, which the summary prints instead: agents with
+   *  a valid address, and how many of them are at mailDomain (0 when null). */
+  mailDomainCounts: { matching: number; addresses: number };
 }
 
 const byKey = ([a]: [string, number], [b]: [string, number]) => (a < b ? -1 : a > b ? 1 : 0);
 
+/** The domain of an agent's address: the text after its last `@`,
+ *  lower-cased, when that is a bare mail domain (see isMailDomain) after a
+ *  non-empty local part; otherwise null. Only ASCII letters are lower-cased,
+ *  so a look-alike such as the Kelvin sign can't become the letter it
+ *  resembles. */
+function addressDomain(address: unknown): string | null {
+  if (typeof address !== "string") return null;
+  const at = address.lastIndexOf("@");
+  if (at <= 0) return null;
+  const domain = address.slice(at + 1).replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return isMailDomain(domain) ? domain : null;
+}
+
+/** The fleet's mail domain, from the addresses of the agent records
+ *  (`AGENT#…` + `AGENT`): the most common domain, provided it covers more
+ *  than half of the agents with a valid address. With no valid address, a
+ *  tie or a plurality short of a majority, it is null, and the reviewer
+ *  sets QA_MAIL_DOMAIN instead. Invalid addresses don't count at all. */
+export function deriveMailDomain(items: Item[]): Pick<Snapshot, "mailDomain" | "mailDomainCounts"> {
+  const perDomain = new Map<string, number>();
+  let addresses = 0;
+  for (const item of items) {
+    if (shapeOf(item) !== "agent") continue;
+    const domain = addressDomain(item.address);
+    if (domain === null) continue;
+    addresses++;
+    perDomain.set(domain, (perDomain.get(domain) ?? 0) + 1);
+  }
+  // A majority is unique, so it is also the most common domain.
+  for (const [domain, matching] of perDomain) {
+    if (matching * 2 > addresses) return { mailDomain: domain, mailDomainCounts: { matching, addresses } };
+  }
+  return { mailDomain: null, mailDomainCounts: { matching: 0, addresses } };
+}
+
+/** Whether and from how many addresses the mail domain was derived:
+ *  counts only, never the domain. */
+export function describeMailDomain({ mailDomain, mailDomainCounts: { matching, addresses } }: Pick<
+  Snapshot, "mailDomain" | "mailDomainCounts"
+>): string {
+  if (mailDomain !== null) return `derived from ${matching} of ${addresses} agent address(es)`;
+  return addresses === 0
+    ? "not derivable (no agent has a valid address)"
+    : `not derivable (no domain covers more than half of ${addresses} agent address(es))`;
+}
+
 /** Scan the whole table (read-only) and keep what redactItem allows. Items
- *  are redacted page by page, so unredacted mail never accumulates. */
+ *  are redacted page by page, so unredacted mail never accumulates. The
+ *  mail domain is derived from the kept agent records. */
 export async function loadSnapshot({ stackName, cfn, ddb }: {
   stackName: string;
   cfn: CloudFormationClient;
@@ -61,7 +116,7 @@ export async function loadSnapshot({ stackName, cfn, ddb }: {
     ExclusiveStartKey = page.LastEvaluatedKey;
   } while (ExclusiveStartKey);
   const sorted = (counts: Map<string, number>) => Object.fromEntries([...counts].sort(byKey));
-  return { items, dropped: sorted(dropped), droppedAttributes: sorted(droppedAttributes) };
+  return { items, dropped: sorted(dropped), droppedAttributes: sorted(droppedAttributes), ...deriveMailDomain(items) };
 }
 
 /** `3: A ×1, B ×2`, or `none`. */
@@ -73,12 +128,16 @@ function describeCounts(counts: Record<string, number>): string {
 
 /** One log line: what the panes get, and what they don't, per shape and per
  *  unlisted attribute. A new kind of item or attribute showing up here is
- *  the cue to decide, in redact.ts, whether panes should see it. */
-export function describeSnapshot({ items, dropped, droppedAttributes }: Snapshot): string {
-  const line = `snapshot: kept ${items.length} item(s), dropped ${describeCounts(dropped)}`;
-  return Object.keys(droppedAttributes).length === 0
-    ? line
-    : `${line}; unlisted attributes dropped ${describeCounts(droppedAttributes)}`;
+ *  the cue to decide, in redact.ts, whether panes should see it. It ends
+ *  with where the panes' mail domain comes from (`mailDomainOverride`:
+ *  QA_MAIL_DOMAIN is set), by counts only: the domain itself is never
+ *  logged. */
+export function describeSnapshot(snapshot: Snapshot, { mailDomainOverride = false } = {}): string {
+  const { items, dropped, droppedAttributes } = snapshot;
+  const parts = [`snapshot: kept ${items.length} item(s), dropped ${describeCounts(dropped)}`];
+  if (Object.keys(droppedAttributes).length > 0) parts.push(`unlisted attributes dropped ${describeCounts(droppedAttributes)}`);
+  parts.push(`mail domain: ${mailDomainOverride ? "set by QA_MAIL_DOMAIN" : describeMailDomain(snapshot)}`);
+  return parts.join("; ");
 }
 
 /** Run `load` once and share its result. A failure isn't cached, so a later
@@ -95,9 +154,10 @@ export function memoize<T>(load: () => Promise<T>): () => Promise<T> {
   };
 }
 
-/** The seed's snapshot: scanned on the first pane's seed, then reused by
- *  every pane until the conductor restarts. `onLoaded` sees each snapshot,
- *  with its drop report, once.
+/** The shared snapshot, for the seed's items and the base env's mail
+ *  domain: scanned on the first call (normally the first pane's seed), then
+ *  reused by every pane until the conductor restarts. `onLoaded` sees each
+ *  snapshot, with its drop report, once.
  *
  *  `region` (QA_AWS_REGION) is the prod stack's region, for both clients.
  *  Without it the default chain decides, which may not be the region the
@@ -106,7 +166,7 @@ export function createSnapshotLoader({ stackName, region, onLoaded }: {
   stackName: string;
   region?: string;
   onLoaded?: (snapshot: Snapshot) => void;
-}): () => Promise<Item[]> {
+}): () => Promise<Snapshot> {
   return memoize(async () => {
     const config = region ? { region } : {};
     const cfn = new CloudFormationClient(config);
@@ -114,7 +174,7 @@ export function createSnapshotLoader({ stackName, region, onLoaded }: {
     try {
       const snapshot = await loadSnapshot({ stackName, cfn, ddb: DynamoDBDocumentClient.from(client) });
       onLoaded?.(snapshot);
-      return snapshot.items;
+      return snapshot;
     } finally {
       cfn.destroy();
       client.destroy();

@@ -18,8 +18,10 @@ export const QA_DEFAULTS: Record<string, string> = {
 const DEFAULT_TRUSTED_LOGINS = "critical-agent-zero";
 
 export interface QaAppConfig {
-  /** The prod mail domain, so the fleet mail redaction behaves as in prod. */
-  mailDomain: string;
+  /** QA_MAIL_DOMAIN, when set: overrides the prod mail domain the snapshot
+   *  derives from the agents' addresses (see deriveMailDomain), which the
+   *  panes need so the fleet mail redaction behaves as in prod. */
+  mailDomain?: string;
   publicRepos: string;
   autoCapabilities: string;
   /** PR authors trusted without write access (QA_TRUSTED_LOGINS). */
@@ -42,13 +44,33 @@ const list = (value: string) => value.split(",").map((s) => s.trim()).filter(Boo
  *  line fail at startup rather than at the first pane's snapshot. */
 const AWS_REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
 
+/** One DNS label: 1–63 of a-z, 0-9 and `-`, not starting or ending in `-`. */
+const LABEL = "[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?";
+/** Two or more labels joined by dots: no scheme, port, path, `@`, space,
+ *  upper case or trailing dot. */
+const DOMAIN = new RegExp(`^${LABEL}(?:\\.${LABEL})+$`);
+
+/** A bare, lower-case mail domain (`mail.example.com`), at most 253
+ *  characters. Anything else, such as a URL, an address or a value carrying
+ *  an inline `# comment`, is refused. */
+export function isMailDomain(value: string): boolean {
+  return value.length <= 253 && DOMAIN.test(value);
+}
+
 /** agent-identity's own keys, from the raw `.env.qa` map. */
 function appConfig(env: Record<string, string>): QaAppConfig {
   if (env.QA_AWS_REGION && !AWS_REGION.test(env.QA_AWS_REGION)) {
     throw new Error(`QA_AWS_REGION must be an AWS region like us-east-1, not ${JSON.stringify(env.QA_AWS_REGION)}`);
   }
+  // The value isn't echoed: logs may be pasted publicly, and the domain is private.
+  if (env.QA_MAIL_DOMAIN && !isMailDomain(env.QA_MAIL_DOMAIN)) {
+    throw new Error(
+      "QA_MAIL_DOMAIN must be a bare, lower-case domain name: labels of a-z, 0-9 and -, joined by at least one dot, " +
+        "with no scheme, port, path, @ or inline comment (the value isn't shown; leave it unset to derive it)",
+    );
+  }
   return {
-    mailDomain: env.QA_MAIL_DOMAIN,
+    ...(env.QA_MAIL_DOMAIN ? { mailDomain: env.QA_MAIL_DOMAIN } : {}),
     publicRepos: env.QA_PUBLIC_REPOS ?? "",
     autoCapabilities: env.QA_AUTO_CAPABILITIES ?? "",
     // `??`, not `||`: an explicitly empty value means "no extra logins".
@@ -59,11 +81,11 @@ function appConfig(env: Record<string, string>): QaAppConfig {
   };
 }
 
-/** Load `.env.qa` through qa-conductor's loadConfig (which requires
- *  GITHUB_QA_TOKEN; here QA_MAIL_DOMAIN too). The token must be able to
- *  comment and label on the repo: the reviewer's, never the agent's. */
+/** Load `.env.qa` through qa-conductor's loadConfig, which requires
+ *  GITHUB_QA_TOKEN. The token must be able to comment and label on the
+ *  repo: the reviewer's, never the agent's. */
 export function loadQaConfig(envFile: string): QaConfig {
-  const cfg = loadConfig(envFile, { defaults: QA_DEFAULTS, required: ["QA_MAIL_DOMAIN"] });
+  const cfg = loadConfig(envFile, { defaults: QA_DEFAULTS });
   return { ...cfg, app: appConfig(cfg.env) };
 }
 

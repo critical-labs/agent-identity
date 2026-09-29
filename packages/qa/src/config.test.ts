@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { allowUnfirewalled, loadQaConfig, qaCacheDir, qaEnvFile } from "./config.js";
+import { allowUnfirewalled, isMailDomain, loadQaConfig, qaCacheDir, qaEnvFile } from "./config.js";
 
 function envFile(lines: string[]): string {
   const path = join(mkdtempSync(join(tmpdir(), "qa-config-")), ".env.qa");
@@ -10,7 +10,7 @@ function envFile(lines: string[]): string {
   return path;
 }
 
-const minimal = ["GITHUB_QA_TOKEN=test-token", "QA_MAIL_DOMAIN=mail.example.test"];
+const minimal = ["GITHUB_QA_TOKEN=test-token"];
 
 describe("loadQaConfig", () => {
   it("fills in this repo, loopback pane origins and the app defaults", () => {
@@ -20,8 +20,7 @@ describe("loadQaConfig", () => {
     expect(cfg.host).toBe("127.0.0.1");
     expect(cfg.ports).toEqual({ harness: 3100, base: 3101, pr: 3102 });
     expect(cfg.paneOrigins).toEqual({ base: "http://127.0.0.1:3101", pr: "http://127.0.0.1:3102" });
-    expect(cfg.app).toEqual({
-      mailDomain: "mail.example.test",
+    expect(cfg.app).toStrictEqual({
       publicRepos: "",
       autoCapabilities: "",
       trustedLogins: ["critical-agent-zero"],
@@ -34,6 +33,7 @@ describe("loadQaConfig", () => {
     const cfg = loadQaConfig(envFile([
       ...minimal,
       "# a comment",
+      "QA_MAIL_DOMAIN=mail.example.test",
       "QA_REPO=someone/agent-identity",
       "QA_PUBLIC_REPOS=o/a,o/b",
       "QA_AUTO_CAPABILITIES=email",
@@ -77,9 +77,80 @@ describe("loadQaConfig", () => {
     expect(loadQaConfig(envFile([...minimal, "QA_TRUSTED_LOGINS="])).app.trustedLogins).toEqual([]);
   });
 
-  it("requires the mail domain and the GitHub token", () => {
-    expect(() => loadQaConfig(envFile(["GITHUB_QA_TOKEN=test-token"]))).toThrow(/QA_MAIL_DOMAIN missing/);
+  it("requires the GitHub token", () => {
     expect(() => loadQaConfig(envFile(["QA_MAIL_DOMAIN=mail.example.test"]))).toThrow(/GITHUB_QA_TOKEN missing/);
+  });
+
+  it("leaves the mail domain to the snapshot unless QA_MAIL_DOMAIN overrides it", () => {
+    expect(loadQaConfig(envFile(minimal)).app).not.toHaveProperty("mailDomain");
+    expect(loadQaConfig(envFile([...minimal, "QA_MAIL_DOMAIN="])).app).not.toHaveProperty("mailDomain");
+    expect(loadQaConfig(envFile([...minimal, "QA_MAIL_DOMAIN=agents.example.test"])).app.mailDomain).toBe("agents.example.test");
+  });
+
+  it("refuses a QA_MAIL_DOMAIN that isn't a bare lower-case domain, without echoing it", () => {
+    for (const value of [
+      // The env file parser keeps an inline comment as part of the value.
+      "mail.example.test             # the fleet's domain",
+      "https://mail.example.test",
+      "mail.example.test:25",
+      "mail.example.test/inbox",
+      "ops@mail.example.test",
+      "Mail.Example.Test",
+      "mailhost",
+    ]) {
+      let message = "";
+      try {
+        loadQaConfig(envFile([...minimal, `QA_MAIL_DOMAIN=${value}`]));
+      } catch (err) {
+        message = (err as Error).message;
+      }
+      expect(message).toMatch(/QA_MAIL_DOMAIN must be a bare, lower-case domain name/);
+      // Logs may be pasted publicly: the value, or the domain in it, is never shown.
+      expect(message).not.toContain(value);
+      expect(message).not.toMatch(/example|mailhost/i);
+    }
+  });
+});
+
+describe("isMailDomain", () => {
+  it.each([
+    "mail.example.test",
+    "example.test",
+    "a.b",
+    "agents-1.mail.example.test",
+    "x1.example.test",
+    `${"a".repeat(63)}.example.test`,
+  ])("accepts %s", (domain) => {
+    expect(isMailDomain(domain)).toBe(true);
+  });
+
+  it.each([
+    "",
+    "localhost",
+    "MAIL.example.test",
+    "mail.Example.test",
+    "https://mail.example.test",
+    "mail.example.test:25",
+    "mail.example.test/",
+    "mail.example.test/inbox",
+    "ops@mail.example.test",
+    "@mail.example.test",
+    "mail..example.test",
+    ".mail.example.test",
+    "mail.example.test.",
+    "-mail.example.test",
+    "mail-.example.test",
+    "mail_box.example.test",
+    "mail example.test",
+    " mail.example.test",
+    "mail.example.test\n",
+    // Look-alikes: a Cyrillic "е", and the Kelvin sign, which lower-cases to "k".
+    "mail.examplе.test",
+    "K.example.test",
+    `${"a".repeat(64)}.example.test`,
+    `${"a.".repeat(127)}test`,
+  ])("refuses %j", (value) => {
+    expect(isMailDomain(value)).toBe(false);
   });
 });
 

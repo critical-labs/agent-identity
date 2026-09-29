@@ -1,13 +1,17 @@
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
+import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { createWorktreeBuild } from "@critical-labs/qa-conductor/adapters/build-worktree";
 import { createProcessProvisioner } from "@critical-labs/qa-conductor/adapters/provisioner-process";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mockClient } from "aws-sdk-client-mock";
+import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createQaAdapters } from "./adapters.js";
 import { loadQaConfig } from "./config.js";
 import { derivePaneEnv } from "./env.js";
-import { createSnapshotLoader, type Snapshot } from "./snapshot.js";
+import { createSeed } from "./seed.js";
+import { createSnapshotLoader, describeSnapshot, type Snapshot } from "./snapshot.js";
 
 // The real qa-conductor factories, wrapped so the options they get can be read.
 vi.mock("@critical-labs/qa-conductor/adapters/build-worktree", async (importOriginal) => {
@@ -18,12 +22,37 @@ vi.mock("@critical-labs/qa-conductor/adapters/provisioner-process", async (impor
   const real = await importOriginal<typeof import("@critical-labs/qa-conductor/adapters/provisioner-process")>();
   return { ...real, createProcessProvisioner: vi.fn(real.createProcessProvisioner) };
 });
-vi.mock("./snapshot.js", async (importOriginal) => {
-  const real = await importOriginal<typeof import("./snapshot.js")>();
-  return { ...real, createSnapshotLoader: vi.fn(() => async () => []) };
+vi.mock("./seed.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./seed.js")>();
+  return { ...real, createSeed: vi.fn(real.createSeed) };
 });
 
+/** What the stand-in snapshot loaders resolve to; a test may change it. */
+const stub = vi.hoisted(() => ({ snapshot: null as unknown as Snapshot }));
+
+// A stand-in loader per createQaAdapters, so nothing reaches AWS unless a
+// test puts the real one back.
+vi.mock("./snapshot.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./snapshot.js")>();
+  return { ...real, createSnapshotLoader: vi.fn(() => vi.fn(async () => stub.snapshot)) };
+});
+
+// Only the tests that put the real snapshot loader back reach these.
+const cfnMock = mockClient(CloudFormationClient);
+const docMock = mockClient(DynamoDBDocumentClient);
+
 const JAVA = "/jdk/bin/java";
+
+const snapshotAt = (mailDomain: string | null, { matching = 2, addresses = 2 } = {}): Snapshot => ({
+  items: [
+    { PK: "AGENT#fp1", SK: "AGENT", agentId: "482913", address: "a@mail.example.test" },
+    { PK: "AGENT#fp2", SK: "AGENT", agentId: "731904", address: "b@mail.example.test" },
+  ],
+  dropped: {},
+  droppedAttributes: {},
+  mailDomain,
+  mailDomainCounts: mailDomain === null ? { matching: 0, addresses } : { matching, addresses },
+});
 
 function setup(extra: string[] = [], { onSnapshot, verifyInstall }: {
   onSnapshot?: (snapshot: Snapshot) => void;
@@ -31,7 +60,7 @@ function setup(extra: string[] = [], { onSnapshot, verifyInstall }: {
 } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "qa-adapters-"));
   const envFile = join(dir, ".env.qa");
-  writeFileSync(envFile, ["GITHUB_QA_TOKEN=test-token", "QA_MAIL_DOMAIN=mail.example.test", ...extra].join("\n"));
+  writeFileSync(envFile, ["GITHUB_QA_TOKEN=test-token", ...extra].join("\n"));
   const cfg = loadQaConfig(envFile);
   const cacheDir = join(dir, "cache");
   const github = { prInfo: vi.fn(), authorPermission: vi.fn(async () => "read") };
@@ -39,10 +68,16 @@ function setup(extra: string[] = [], { onSnapshot, verifyInstall }: {
   return { cfg, cacheDir, github, ...qa };
 }
 
+/** The snapshot loader the nth createQaAdapters built, and the one its seed got. */
+const loaderOf = (n = 0) => vi.mocked(createSnapshotLoader).mock.results[n].value as Mock<() => Promise<Snapshot>>;
+const seedSnapshotOf = (n = 0) => vi.mocked(createSeed).mock.calls[n][0].snapshot;
+
 beforeEach(() => {
   vi.mocked(createWorktreeBuild).mockClear();
   vi.mocked(createProcessProvisioner).mockClear();
   vi.mocked(createSnapshotLoader).mockClear();
+  vi.mocked(createSeed).mockClear();
+  stub.snapshot = snapshotAt("mail.example.test");
 });
 
 describe("build", () => {
@@ -222,8 +257,84 @@ describe("seed, envTransform, auth and the base env", () => {
     expect(adapters.auth.requiresDb).toBe(true);
   });
 
-  it("derives the pane's prod env from the QA config", async () => {
+  it("seeds each pane with the shared snapshot's items", async () => {
+    setup();
+    expect(await seedSnapshotOf()()).toBe(stub.snapshot.items);
+    expect(loaderOf()).toHaveBeenCalledOnce();
+  });
+
+  it("takes MAIL_DOMAIN from the snapshot the seed loads, and the rest from the QA config", async () => {
     const { readBaseEnv } = setup(["QA_PUBLIC_REPOS=o/a", "QA_AUTO_CAPABILITIES=email"]);
     expect(await readBaseEnv()).toEqual({ MAIL_DOMAIN: "mail.example.test", PUBLIC_REPOS: "o/a", AUTO_CAPABILITIES: "email" });
+    // The same loader as the seed's, not a second one.
+    expect(createSnapshotLoader).toHaveBeenCalledOnce();
+    expect(loaderOf()).toHaveBeenCalledOnce();
+    await seedSnapshotOf()();
+    expect(loaderOf()).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets a QA_MAIL_DOMAIN override win, without waiting for the snapshot", async () => {
+    const { readBaseEnv } = setup(["QA_MAIL_DOMAIN=override.example.test"]);
+    expect(await readBaseEnv()).toEqual({ MAIL_DOMAIN: "override.example.test", PUBLIC_REPOS: "", AUTO_CAPABILITIES: "" });
+    expect(loaderOf()).not.toHaveBeenCalled();
+  });
+
+  it("tells the reviewer to set QA_MAIL_DOMAIN when the snapshot can't give the domain", async () => {
+    stub.snapshot = snapshotAt(null, { addresses: 4 });
+    await expect(setup().readBaseEnv()).rejects.toThrow(
+      "the mail domain is not derivable (no domain covers more than half of 4 agent address(es)): " +
+        "set QA_MAIL_DOMAIN in .env.qa and restart pnpm qa",
+    );
+    stub.snapshot = snapshotAt(null, { addresses: 0 });
+    await expect(setup().readBaseEnv()).rejects.toThrow(
+      "the mail domain is not derivable (no agent has a valid address): set QA_MAIL_DOMAIN in .env.qa and restart pnpm qa",
+    );
+  });
+
+  it("fails as the snapshot does, so a later pane can retry", async () => {
+    const { readBaseEnv } = setup();
+    loaderOf().mockRejectedValueOnce(new Error("ExpiredToken"));
+    await expect(readBaseEnv()).rejects.toThrow("ExpiredToken");
+    expect((await readBaseEnv()).MAIL_DOMAIN).toBe("mail.example.test");
+  });
+
+  describe("with the real snapshot loader", () => {
+    const items = snapshotAt("mail.example.test").items;
+
+    beforeEach(async () => {
+      const real = await vi.importActual<typeof import("./snapshot.js")>("./snapshot.js");
+      vi.mocked(createSnapshotLoader).mockImplementationOnce(real.createSnapshotLoader);
+      cfnMock.reset();
+      docMock.reset();
+      cfnMock.on(DescribeStackResourcesCommand).resolves({ StackResources: [
+        { LogicalResourceId: "TableCD117FE6", ResourceType: "AWS::DynamoDB::Table", PhysicalResourceId: "AgentIdentity-Table" },
+      ] as never });
+      docMock.on(ScanCommand).resolves({ Items: items });
+    });
+
+    it("scans prod once for both the base env and the seed, whichever asks first", async () => {
+      const { readBaseEnv } = setup();
+      // The conductor seeds before it reads the base env, but nothing here relies on that.
+      expect((await readBaseEnv()).MAIL_DOMAIN).toBe("mail.example.test");
+      expect(await seedSnapshotOf()()).toEqual(items);
+      expect(await readBaseEnv()).toEqual({ MAIL_DOMAIN: "mail.example.test", PUBLIC_REPOS: "", AUTO_CAPABILITIES: "" });
+      expect(docMock.commandCalls(ScanCommand)).toHaveLength(1);
+    });
+
+    it("logs nothing that names the mail domain", async () => {
+      const logged: unknown[][] = [];
+      const spies = (["log", "info", "warn", "error", "debug"] as const).map((level) =>
+        vi.spyOn(console, level).mockImplementation((...args: unknown[]) => { logged.push(args); }));
+      try {
+        // As serve.ts logs each snapshot.
+        const { readBaseEnv } = setup([], { onSnapshot: (s) => console.log(`[qa] ${describeSnapshot(s)}`) });
+        await seedSnapshotOf()();
+        expect((await readBaseEnv()).MAIL_DOMAIN).toBe("mail.example.test");
+      } finally {
+        for (const spy of spies) spy.mockRestore();
+      }
+      expect(logged).toHaveLength(1);
+      expect(JSON.stringify(logged)).not.toMatch(/example|\.test/);
+    });
   });
 });
