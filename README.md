@@ -197,7 +197,7 @@ The API reads the same variables as the Lambda (`FLEET_KEY_REQUIRED`, `PUBLIC_RE
 
 You need macOS (for other platforms, see step 2), Node 22+, Java 17+, and AWS credentials that can read the production stack (`cloudformation:DescribeStackResources` and `dynamodb:Scan` on its table).
 
-1. **Install DynamoDB Local** once: `pnpm qa:setup`. It downloads AWS's tarball, refuses it unless its SHA-256 matches the pin in `packages/qa/src/dynamodb-local.ts`, and extracts it under `~/.cache/qa-conductor/agent-identity/` (or `$XDG_CACHE_HOME`). It then checks Java and the firewall rule.
+1. **Install DynamoDB Local** once: `pnpm qa:setup`. It downloads AWS's tarball, refuses it unless its SHA-256 matches the pin in `packages/qa/src/dynamodb-local.ts`, and extracts it under `~/.cache/qa-conductor/agent-identity/` (or `$XDG_CACHE_HOME`). It records the SHA-256 of the extracted `DynamoDBLocal.jar` next to the pin, and `pnpm qa` re-hashes the jar on every start and refuses to run if it has changed; rerun `pnpm qa:setup` to reinstall. It then checks Java and the firewall rule.
 2. **Block inbound connections to Java.** DynamoDB Local has no bind option, so it listens on every interface, and the panes hold real (if redacted) fleet data. `pnpm qa` refuses to start unless the macOS application firewall is on and blocks the exact Java binary the panes run. When the rule is missing, both commands print the fix, which is of this form:
    ```bash
    sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <java>

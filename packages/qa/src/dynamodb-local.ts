@@ -3,7 +3,7 @@
 // install it once (`pnpm qa:setup`) and check the install (`pnpm qa`).
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, createReadStream } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
 import { delimiter, dirname, join } from "node:path";
 import { promisify } from "node:util";
@@ -27,7 +27,8 @@ export const DDB_LOCAL_SHA256 = "f80bcec477f85f57e2c77f8d54aa6b672a8403fceff0c45
 
 const JAR = "DynamoDBLocal.jar";
 const LIB = "DynamoDBLocal_lib";
-/** Written last by an install: the checksum of the tarball it came from. */
+/** Written last by an install: the checksum of the tarball it came from and
+ *  of the jar it extracted (see formatMarker). */
 const MARKER = ".sha256";
 const JAVA_HOME_TOOL = "/usr/libexec/java_home";
 const MIN_JAVA = 17;
@@ -207,41 +208,107 @@ export function verifySha256(data: Uint8Array, expected: string): void {
   }
 }
 
-/** Installed = the jar and its libraries are present, and the marker says
- *  they came from the pinned tarball. */
-export async function isInstalled(home: string, sha256 = DDB_LOCAL_SHA256): Promise<boolean> {
+/** SHA-256 of a file, streamed (the jar is several MB). */
+export async function sha256File(path: string): Promise<string> {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(path)) hash.update(chunk as Buffer);
+  return hash.digest("hex");
+}
+
+/** What an install records: the tarball's checksum (the pin it passed) and
+ *  the extracted jar's, which `pnpm qa` re-checks before every start. */
+export interface InstallMarker {
+  tarball: string;
+  jar: string;
+}
+
+export const formatMarker = ({ tarball, jar }: InstallMarker): string => `tarball ${tarball}\njar ${jar}\n`;
+
+/** The marker's two checksums, or null when either is missing or malformed
+ *  (as in a marker written before the jar's checksum was recorded). */
+export function parseMarker(text: string): InstallMarker | null {
+  const fields = new Map<string, string>();
+  for (const line of text.split("\n")) {
+    const m = /^(tarball|jar) ([0-9a-f]{64})$/.exec(line.trim());
+    if (m) fields.set(m[1], m[2]);
+  }
+  const tarball = fields.get("tarball");
+  const jar = fields.get("jar");
+  return tarball && jar ? { tarball, jar } : null;
+}
+
+/** The file access checkInstall needs, injectable for tests. */
+export interface InstallFs {
+  readFile(path: string, encoding: "utf8"): Promise<string>;
+  access(path: string): Promise<void>;
+}
+
+export interface InstallCheckOptions {
+  sha256?: string;
+  fs?: InstallFs;
+  hashFile?: (path: string) => Promise<string>;
+}
+
+export type InstallState = { ok: true } | { ok: false; reason: string };
+
+/** Installed = the jar and its libraries are present, the marker says they
+ *  came from the pinned tarball, and the jar still hashes to what the
+ *  install recorded. The jar is re-hashed on every call, so a jar replaced
+ *  after `pnpm qa:setup` is caught before Java runs it. */
+export async function checkInstall(home: string, {
+  sha256 = DDB_LOCAL_SHA256,
+  fs = { readFile, access },
+  hashFile = sha256File,
+}: InstallCheckOptions = {}): Promise<InstallState> {
+  let text: string;
   try {
-    const [marker] = await Promise.all([
-      readFile(join(home, MARKER), "utf8"),
-      access(join(home, JAR)),
-      access(join(home, LIB)),
-    ]);
-    return marker.trim() === sha256;
+    [text] = await Promise.all([fs.readFile(join(home, MARKER), "utf8"), fs.access(join(home, JAR)), fs.access(join(home, LIB))]);
   } catch {
-    return false;
+    return { ok: false, reason: `DynamoDB Local is not installed in ${home}` };
   }
+  const marker = parseMarker(text);
+  if (!marker) return { ok: false, reason: `the DynamoDB Local install in ${home} has no checksum for ${JAR} (it predates that check)` };
+  if (marker.tarball !== sha256) return { ok: false, reason: `the DynamoDB Local install in ${home} is not the pinned version` };
+
+  const jarPath = join(home, JAR);
+  let jar: string;
+  try {
+    jar = await hashFile(jarPath);
+  } catch (err) {
+    return { ok: false, reason: `could not hash ${jarPath}: ${(err as Error).message}` };
+  }
+  if (jar !== marker.jar) {
+    return { ok: false, reason: `${jarPath} has changed since pnpm qa:setup installed it (recorded ${marker.jar}, now ${jar})` };
+  }
+  return { ok: true };
 }
 
-export async function assertInstalled(home: string, sha256 = DDB_LOCAL_SHA256): Promise<void> {
-  if (!(await isInstalled(home, sha256))) {
-    throw new Error(`DynamoDB Local is not installed in ${home} (or is not the pinned version): run pnpm qa:setup`);
-  }
+export async function isInstalled(home: string, opts: InstallCheckOptions = {}): Promise<boolean> {
+  return (await checkInstall(home, opts)).ok;
 }
 
-/** Download, verify, extract. Nothing touches the disk until the checksum
- *  matches, and the new tree replaces the old one only once it's complete. */
+export async function assertInstalled(home: string, opts: InstallCheckOptions = {}): Promise<void> {
+  const state = await checkInstall(home, opts);
+  if (!state.ok) throw new Error(`${state.reason}: run pnpm qa:setup`);
+}
+
+/** Download, verify, extract, and record the tarball's and the jar's
+ *  checksums. Nothing touches the disk until the tarball's checksum matches,
+ *  and the new tree replaces the old one only once it's complete. */
 export async function installDynamoDbLocal({
   home,
   url = DDB_LOCAL_URL,
   sha256 = DDB_LOCAL_SHA256,
   fetchFn = fetch,
   execFileFn = execFileAsync,
+  hashFile = sha256File,
 }: {
   home: string;
   url?: string;
   sha256?: string;
   fetchFn?: (url: string) => Promise<Response>;
   execFileFn?: ExecFileFn;
+  hashFile?: (path: string) => Promise<string>;
 }): Promise<void> {
   const res = await fetchFn(url);
   if (!res.ok) throw new Error(`downloading ${url} failed: HTTP ${res.status}`);
@@ -262,7 +329,7 @@ export async function installDynamoDbLocal({
     } catch {
       throw new Error(`the DynamoDB Local tarball has no ${JAR}`);
     }
-    await writeFile(join(tree, MARKER), `${sha256}\n`);
+    await writeFile(join(tree, MARKER), formatMarker({ tarball: sha256, jar: await hashFile(join(tree, JAR)) }));
     await rm(home, { recursive: true, force: true });
     await rename(tree, home);
   } finally {

@@ -6,8 +6,9 @@ import { DynamoDBClient, ListTablesCommand } from "@aws-sdk/client-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  DDB_LOCAL_SHA256, QA_REGION, QA_TABLE, assertInstalled, createDynamoDbLocal, ddbLocalHome,
-  installDynamoDbLocal, isInstalled, javaBinary, localClient, parseJavaMajor, verifySha256,
+  DDB_LOCAL_SHA256, QA_REGION, QA_TABLE, assertInstalled, checkInstall, createDynamoDbLocal, ddbLocalHome,
+  formatMarker, installDynamoDbLocal, isInstalled, javaBinary, localClient, parseJavaMajor, parseMarker,
+  sha256File, verifySha256,
 } from "./dynamodb-local.js";
 
 const ddb = mockClient(DynamoDBClient);
@@ -148,6 +149,92 @@ describe("javaBinary", () => {
   });
 });
 
+const sha256Of = (data: string | Buffer) => createHash("sha256").update(data).digest("hex");
+
+describe("the install marker", () => {
+  const tarball = sha256Of("tarball");
+  const jar = sha256Of("jar");
+
+  it("records the tarball pin and the jar's checksum, and reads them back", () => {
+    expect(formatMarker({ tarball, jar })).toBe(`tarball ${tarball}\njar ${jar}\n`);
+    expect(parseMarker(formatMarker({ tarball, jar }))).toEqual({ tarball, jar });
+  });
+
+  it("rejects a marker without both checksums, such as one from before the jar was recorded", () => {
+    expect(parseMarker(`${tarball}\n`)).toBeNull();
+    expect(parseMarker(`tarball ${tarball}\n`)).toBeNull();
+    expect(parseMarker(`jar ${jar}\n`)).toBeNull();
+    expect(parseMarker(`tarball ${tarball}\njar not-a-sha\n`)).toBeNull();
+    expect(parseMarker("")).toBeNull();
+  });
+});
+
+describe("sha256File", () => {
+  it("hashes a file's contents", async () => {
+    const path = join(mkdtempSync(join(tmpdir(), "qa-hash-")), "f");
+    writeFileSync(path, "some jar bytes");
+    expect(await sha256File(path)).toBe(sha256Of("some jar bytes"));
+  });
+});
+
+describe("checkInstall (injected fs and hash)", () => {
+  const home = "/cache/dynamodb-local";
+  const tarball = sha256Of("tarball");
+  const jar = sha256Of("jar");
+  const fsWith = (marker: string | null, present = true) => ({
+    readFile: vi.fn(async (path: string) => {
+      if (path !== join(home, ".sha256") || marker === null) throw Object.assign(new Error("ENOENT"), { code: "ENOENT" });
+      return marker;
+    }),
+    access: vi.fn(async (path: string) => {
+      if (!present) throw Object.assign(new Error(`ENOENT: ${path}`), { code: "ENOENT" });
+    }),
+  });
+
+  it("re-hashes the jar on every check and accepts it when it matches the marker", async () => {
+    const hashFile = vi.fn(async () => jar);
+    const fs = fsWith(formatMarker({ tarball, jar }));
+    expect(await checkInstall(home, { sha256: tarball, fs, hashFile })).toEqual({ ok: true });
+    expect(await checkInstall(home, { sha256: tarball, fs, hashFile })).toEqual({ ok: true });
+    expect(hashFile).toHaveBeenCalledTimes(2);
+    expect(hashFile).toHaveBeenCalledWith(join(home, "DynamoDBLocal.jar"));
+    await expect(assertInstalled(home, { sha256: tarball, fs, hashFile })).resolves.toBeUndefined();
+  });
+
+  it("refuses a jar that changed after setup, naming both checksums", async () => {
+    const changed = sha256Of("a different jar");
+    const opts = { sha256: tarball, fs: fsWith(formatMarker({ tarball, jar })), hashFile: async () => changed };
+    expect(await isInstalled(home, opts)).toBe(false);
+    await expect(assertInstalled(home, opts)).rejects.toThrow(
+      new RegExp(`DynamoDBLocal.jar .*changed since pnpm qa:setup.*${jar}.*${changed}.*run pnpm qa:setup`),
+    );
+  });
+
+  it("refuses a jar it cannot read", async () => {
+    const opts = { sha256: tarball, fs: fsWith(formatMarker({ tarball, jar })), hashFile: async () => { throw new Error("EACCES"); } };
+    await expect(assertInstalled(home, opts)).rejects.toThrow(/could not hash .*DynamoDBLocal.jar.*EACCES.*run pnpm qa:setup/);
+  });
+
+  it("refuses an install from another tarball, without hashing the jar", async () => {
+    const hashFile = vi.fn(async () => jar);
+    const opts = { sha256: "0".repeat(64), fs: fsWith(formatMarker({ tarball, jar })), hashFile };
+    await expect(assertInstalled(home, opts)).rejects.toThrow(/not the pinned version.*run pnpm qa:setup/);
+    expect(hashFile).not.toHaveBeenCalled();
+  });
+
+  it("refuses an older install whose marker has no jar checksum", async () => {
+    const opts = { sha256: tarball, fs: fsWith(`${tarball}\n`), hashFile: async () => jar };
+    await expect(assertInstalled(home, opts)).rejects.toThrow(/no checksum for DynamoDBLocal.jar.*run pnpm qa:setup/);
+  });
+
+  it("reports a missing install", async () => {
+    for (const fs of [fsWith(null), fsWith(formatMarker({ tarball, jar }), false)]) {
+      expect(await checkInstall(home, { sha256: tarball, fs, hashFile: async () => jar }))
+        .toEqual({ ok: false, reason: `DynamoDB Local is not installed in ${home}` });
+    }
+  });
+});
+
 describe("install helpers", () => {
   const tarball = Buffer.from("pretend this is dynamodb_local_latest.tar.gz");
   const sha = createHash("sha256").update(tarball).digest("hex");
@@ -180,7 +267,7 @@ describe("install helpers", () => {
     })).rejects.toThrow(/checksum mismatch/);
     expect(fakeTar).not.toHaveBeenCalled();
     expect(existsSync(home)).toBe(false);
-    expect(await isInstalled(home, sha)).toBe(false);
+    expect(await isInstalled(home, { sha256: sha })).toBe(false);
   });
 
   it("refuses a failed download", async () => {
@@ -190,22 +277,42 @@ describe("install helpers", () => {
     expect(fakeTar).not.toHaveBeenCalled();
   });
 
-  it("extracts a matching download into the home and records the checksum", async () => {
+  it("extracts a matching download into the home and records the tarball pin and the jar's checksum", async () => {
     const cache = mkdtempSync(join(tmpdir(), "qa-cache-"));
     const home = ddbLocalHome(cache);
     expect(home).toBe(join(cache, "dynamodb-local"));
     await installDynamoDbLocal({ home, sha256: sha, fetchFn: download(tarball), execFileFn: fakeTar });
     expect(fakeTar).toHaveBeenCalledOnce();
     expect(existsSync(join(home, "DynamoDBLocal.jar"))).toBe(true);
-    expect(readFileSync(join(home, ".sha256"), "utf8").trim()).toBe(sha);
-    expect(await isInstalled(home, sha)).toBe(true);
-    await expect(assertInstalled(home, sha)).resolves.toBeUndefined();
+    expect(readFileSync(join(home, ".sha256"), "utf8")).toBe(`tarball ${sha}\njar ${sha256Of("jar")}\n`);
+    expect(await isInstalled(home, { sha256: sha })).toBe(true);
+    await expect(assertInstalled(home, { sha256: sha })).resolves.toBeUndefined();
+  });
+
+  it("hashes the extracted jar with the injected hash", async () => {
+    const home = ddbLocalHome(mkdtempSync(join(tmpdir(), "qa-cache-")));
+    const hashFile = vi.fn(async () => "a".repeat(64));
+    await installDynamoDbLocal({ home, sha256: sha, fetchFn: download(tarball), execFileFn: fakeTar, hashFile });
+    expect(hashFile).toHaveBeenCalledOnce();
+    expect(String(vi.mocked(hashFile).mock.calls[0]).endsWith("DynamoDBLocal.jar")).toBe(true);
+    expect(parseMarker(readFileSync(join(home, ".sha256"), "utf8"))).toEqual({ tarball: sha, jar: "a".repeat(64) });
+  });
+
+  it("refuses a jar modified after install until setup reinstalls it", async () => {
+    const home = ddbLocalHome(mkdtempSync(join(tmpdir(), "qa-cache-")));
+    await installDynamoDbLocal({ home, sha256: sha, fetchFn: download(tarball), execFileFn: fakeTar });
+    writeFileSync(join(home, "DynamoDBLocal.jar"), "jar, patched");
+    expect(await isInstalled(home, { sha256: sha })).toBe(false);
+    await expect(assertInstalled(home, { sha256: sha })).rejects.toThrow(/changed since pnpm qa:setup/);
+    await installDynamoDbLocal({ home, sha256: sha, fetchFn: download(tarball), execFileFn: fakeTar });
+    expect(readFileSync(join(home, "DynamoDBLocal.jar"), "utf8")).toBe("jar");
+    await expect(assertInstalled(home, { sha256: sha })).resolves.toBeUndefined();
   });
 
   it("treats an install from another checksum as missing", async () => {
     const home = ddbLocalHome(mkdtempSync(join(tmpdir(), "qa-cache-")));
     await installDynamoDbLocal({ home, sha256: sha, fetchFn: download(tarball), execFileFn: fakeTar });
-    expect(await isInstalled(home, "0".repeat(64))).toBe(false);
-    await expect(assertInstalled(home, "0".repeat(64))).rejects.toThrow(/pnpm qa:setup/);
+    expect(await isInstalled(home, { sha256: "0".repeat(64) })).toBe(false);
+    await expect(assertInstalled(home, { sha256: "0".repeat(64) })).rejects.toThrow(/pnpm qa:setup/);
   });
 });

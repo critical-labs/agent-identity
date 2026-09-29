@@ -52,6 +52,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   The GitHub token must be able to comment and label on this repo. It's the reviewer's token, **not** the agent's, since the agent is read-only.
 - **`dynamodb-local.ts`:** the `database` plugin for `createProcessProvisioner`, plus install helpers.
   - The home is `${cacheDir}/dynamodb-local`, holding the extracted tarball. `DDB_LOCAL_SHA256` pins the tarball checksum, and `pnpm qa:setup` refuses a download that doesn't match.
+  - The install marker (`.sha256`, written last) records both the tarball pin and the SHA-256 of the extracted `DynamoDBLocal.jar`. `checkInstall(home, { sha256, fs, hashFile })` re-hashes the jar on every call; `pnpm qa` refuses to start when it no longer matches, or when the marker predates the jar checksum, and `pnpm qa:setup` reinstalls in either case. `fs` and `hashFile` are injectable for tests. The libraries in `DynamoDBLocal_lib` aren't hashed.
   - `javaBinary()` resolves the **real** binary (`$(/usr/libexec/java_home)/bin/java` on macOS, rather than the `/usr/bin/java` stub, so the firewall rule and the process agree). It requires Java 17 or later.
   - `command({ port })` → `{ cmd: javaBinary, args: ['-Djava.library.path=<home>/DynamoDBLocal_lib', '-jar', '<home>/DynamoDBLocal.jar', '-inMemory', '-sharedDb', '-disableTelemetry', '-port', String(port)], cwd: home }`.
   - `ready({ port, signal })` polls `ListTables` with a short per-call timeout until it succeeds or the signal aborts.
@@ -112,12 +113,12 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - **seed, envTransform, auth:** from the modules above.
   - **`readBaseEnv`:** `MAIL_DOMAIN`, `PUBLIC_REPOS` and `AUTO_CAPABILITIES` from the config.
 - **`serve.ts`:** the `pnpm qa` entry.
-  1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install. Each failure prints how to fix it and exits non-zero.
+  1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install, re-hashing the jar. Each failure prints how to fix it and exits non-zero.
   2. Create the GitHub client with qa-conductor's `createGithub` and the configured labels.
   3. Start the conductor, and on SIGINT, SIGTERM or SIGHUP `await shutdown()`.
   4. Print the harness URL.
   5. When the first pane's seed loads the snapshot, log one line with the kept count and the drop report.
-- **`setup.ts`:** the `pnpm qa:setup` entry. It downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache, and prints the firewall commands if the rule is missing.
+- **`setup.ts`:** the `pnpm qa:setup` entry. Unless `checkInstall` passes, it downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache and records the jar's checksum. It then prints the firewall commands if the rule is missing.
 - **`qa-conductor.d.ts`:** minimal ambient module declarations for the qa-conductor specifiers used, since qa-conductor ships plain JS. This keeps the root `tsc --noEmit` green.
 - **Root scripts:** `"qa": "tsx packages/qa/src/serve.ts"` and `"qa:setup": "tsx packages/qa/src/setup.ts"`. `.env.qa` is gitignored.
 - **README:** a "Side-by-side PR QA" section covering setup, the firewall step, `.env.qa`, `pnpm qa`, the trust model (write access or `QA_TRUSTED_LOGINS`) and what the redaction keeps.
@@ -144,7 +145,7 @@ Add dependencies with `npx pnpm@9.15.9`. The lockfile diff must contain only the
   - the snapshot table lookup and pagination;
   - the firewall output parser;
   - the DynamoDB Local command, ready check and handle;
-  - the setup checksum check;
+  - the setup checksum check, and the jar checksum recorded at setup and re-checked at start (with injected fs and hash);
   - the adapter composition (trust logins, install command, launch command).
 - **C2 end-to-end (manual):** boot the C2 PR itself (by `critical-agent-zero`, from its fork) against `main`, then:
   - check that both dashboards list the real agents and that mail shows no bodies or links;

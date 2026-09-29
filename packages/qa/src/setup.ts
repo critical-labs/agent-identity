@@ -1,9 +1,10 @@
-// `pnpm qa:setup`: install DynamoDB Local once (checksum-pinned), then check
-// Java and the firewall rule `pnpm qa` will insist on.
+// `pnpm qa:setup`: install DynamoDB Local once (checksum-pinned, with the
+// jar's checksum recorded for `pnpm qa` to re-check), then check Java and
+// the firewall rule `pnpm qa` will insist on.
 import { existsSync } from "node:fs";
 import { parseEnvFile } from "@critical-labs/qa-conductor/config";
 import { allowUnfirewalled, qaCacheDir, qaEnvFile } from "./config.js";
-import { DDB_LOCAL_URL, ddbLocalHome, installDynamoDbLocal, isInstalled, javaBinary } from "./dynamodb-local.js";
+import { DDB_LOCAL_URL, checkInstall, ddbLocalHome, installDynamoDbLocal, javaBinary } from "./dynamodb-local.js";
 import { assertJavaInboundBlocked } from "./firewall.js";
 
 const fail = (err: unknown): never => {
@@ -12,12 +13,15 @@ const fail = (err: unknown): never => {
 };
 
 const home = ddbLocalHome(qaCacheDir());
-if (await isInstalled(home)) {
-  console.log(`[qa:setup] DynamoDB Local is already installed in ${home}`);
+const state = await checkInstall(home);
+if (state.ok) {
+  console.log(`[qa:setup] DynamoDB Local is already installed in ${home} (jar checksum verified)`);
 } else {
-  console.log(`[qa:setup] downloading ${DDB_LOCAL_URL}…`);
+  // Missing, another version, or a jar that changed since it was installed:
+  // a fresh, verified install replaces the whole tree.
+  console.log(`[qa:setup] ${state.reason}; downloading ${DDB_LOCAL_URL}…`);
   await installDynamoDbLocal({ home }).catch(fail);
-  console.log(`[qa:setup] checksum verified; installed DynamoDB Local in ${home}`);
+  console.log(`[qa:setup] checksum verified; installed DynamoDB Local in ${home} and recorded its jar's checksum`);
 }
 
 const java = await javaBinary().catch(fail);
