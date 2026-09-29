@@ -87,6 +87,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
     - the corpus includes `123 456`, `123-456`, `12 34 56`, `1.2.3.4.5.6`, `X4K-9PQ`, `AB12CD`, full-width digits and scheme-less links.
 - **`seed.ts`:** `createSeed({ snapshot })` → `{ databases: ['agent-identity-qa'], seedPane({ db }) }`. It runs `ensureTable(localClient(db), db.tableName)`, then batch-writes in chunks of 25, retrying `UnprocessedItems` with backoff and failing after a bounded number of attempts.
   - `ensureTable` is imported from `@agent-identity/api`, which exports it along with `TABLE_KEYS`, so the seed and the dev server share the schema code.
+  - **Known limitation:** the seed runs in the harness, so it creates the pane table with the harness checkout's `ensureTable` (the schema from `main`, normally). The pane's own dev server starts afterwards, and its `ensureTable` is a no-op on an existing table. A PR that changes the key schema therefore runs against the old schema, and its QA needs the pane table recreated with the PR's schema. The harness doesn't do that yet.
 - **`env.ts`:** `derivePaneEnv({ prodEnv, pane })` → `{ api: {…} }`, with exactly these keys:
   - `PORT`: from `pane.services.api.port`;
   - `TABLE_NAME=agent-identity-qa`;
@@ -121,7 +122,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
 - **`setup.ts`:** the `pnpm qa:setup` entry. Unless `checkInstall` passes, it downloads the DynamoDB Local tarball from AWS's official URL, verifies `DDB_LOCAL_SHA256`, extracts it into the cache and records the jar's checksum. It then prints the firewall commands if the rule is missing.
 - **`qa-conductor.d.ts`:** minimal ambient module declarations for the qa-conductor specifiers used, since qa-conductor ships plain JS. This keeps the root `tsc --noEmit` green.
 - **Root scripts:** `"qa": "tsx packages/qa/src/serve.ts"` and `"qa:setup": "tsx packages/qa/src/setup.ts"`. `.env.qa` is gitignored.
-- **README:** a "Side-by-side PR QA" section covering setup, the firewall step, `.env.qa`, `pnpm qa`, the trust model (write access or `QA_TRUSTED_LOGINS`) and what the redaction keeps.
+- **README:** a "Side-by-side PR QA" section covering setup (including the jar checksum), the firewall step, `.env.qa` (including `QA_AWS_REGION`), `pnpm qa`, the trust model (write access or `QA_TRUSTED_LOGINS`, and the caveat that logins can change hands), what the redaction keeps and drops, and the table-schema limitation.
 
 ### Lockfile
 
@@ -130,8 +131,9 @@ Add dependencies with `npx pnpm@9.15.9`. The lockfile diff must contain only the
 ### Security summary
 
 - The trust gate (in qa-conductor) is the boundary: write access, or listing in `QA_TRUSTED_LOGINS`, plus a head in this repo or the author's own fork.
+- `trust.logins` is keyed on GitHub logins, which can be renamed and later registered by someone else. The README says to keep the list short and review it; write access remains the default gate.
 - Installs skip scripts and pnpmfiles.
-- Panes run with only `PATH` plus their declared env, and bind to loopback. DynamoDB Local is covered by the enforced firewall rule.
+- Panes run with only `PATH` plus their declared env, and bind to loopback. DynamoDB Local is covered by the enforced firewall rule. Its tarball is checksum-pinned, and its jar is re-hashed against the install's record at every start.
 - Real AWS credentials exist only in the harness process, for one read-only Scan. The snapshot is redacted before it's written anywhere and is never persisted.
 
 ## Testing
