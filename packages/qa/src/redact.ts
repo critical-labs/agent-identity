@@ -26,22 +26,27 @@ export function shapeOf(item: Item): Shape | null {
   return match?.shape ?? null;
 }
 
-/** A type tag, as this table's keys use them (AGENT, SIG, FLEET…). */
+/** A type tag before a `#`, as this table's keys use them (AGENT#, SIG#…). */
 const TAG = /^[A-Z][A-Z_]{0,31}$/;
 
-/** One key's part for the drop report: the text up to and including its
- *  first `#`, or the whole key when it has none. A part that isn't a type
- *  tag could be a value, so it is reported as `?`. */
+/** The whole keys (no `#`) the repo writes. An upper-case key can't be told
+ *  apart from an upper-case value (a letter-only code), so a key without a
+ *  `#` is reported only when it is one of these. Add a tag here on purpose. */
+const KNOWN_TAGS = new Set(["AGENT", "ADDR", "STATUS", "FLEET", "ADMINKEY", "VIEWER"]);
+
+/** One key's part for the drop report: the type tag up to and including its
+ *  first `#`, or the whole key when it has none and is a known tag. Anything
+ *  else could be a value, so it is reported as `?`. */
 function keyPart(key: unknown): string {
   if (typeof key !== "string") return "?";
   const hash = key.indexOf("#");
-  const tag = hash === -1 ? key : key.slice(0, hash);
-  if (!TAG.test(tag)) return "?";
-  return hash === -1 ? tag : `${tag}#`;
+  if (hash === -1) return KNOWN_TAGS.has(key) ? key : "?";
+  const tag = key.slice(0, hash);
+  return TAG.test(tag) ? `${tag}#` : "?";
 }
 
 /** What the snapshot's drop report counts an item under, e.g. `NONCE#/SIG#`
- *  or `MAILBOX#/META`. Never a value. */
+ *  or `FLEET#/FLEET`. Never a value. */
 export function shapeKey(item: Item): string {
   return `${keyPart(item.PK)}/${keyPart(item.SK)}`;
 }

@@ -68,10 +68,12 @@ describe("redactItem: item shapes are an allowlist", () => {
 describe("shapeKey: what the drop report counts by, never a value", () => {
   it.each([
     [{ PK: "FLEET#9f86d081884c7d65", SK: "FLEET" }, "FLEET#/FLEET"],
+    [{ PK: "ADMINKEY#9f86d081884c7d65", SK: "ADMINKEY" }, "ADMINKEY#/ADMINKEY"],
+    [{ PK: "VIEWER#9f86d081884c7d65", SK: "VIEWER" }, "VIEWER#/VIEWER"],
     [{ PK: "NONCE#fp1", SK: "SIG#c2lnbmF0dXJl" }, "NONCE#/SIG#"],
     [{ PK: "AGENT#fp1", SK: "SESSION#1" }, "AGENT#/SESSION#"],
-    [{ PK: "MAILBOX#482913", SK: "META" }, "MAILBOX#/META"],
-    [{ PK: "OTP#482913", SK: "OTP" }, "OTP#/OTP"],
+    [{ PK: "AGENT#fp1", SK: "STATUS" }, "AGENT#/STATUS"],
+    [{ PK: "ADDR#482913", SK: "ADDR" }, "ADDR#/ADDR"],
   ])("%o → %s", (item, key) => {
     expect(shapeKey(item)).toBe(key);
   });
@@ -81,6 +83,14 @@ describe("shapeKey: what the drop report counts by, never a value", () => {
     expect(shapeKey({ PK: "user@example.test#1", SK: "k9F#x" })).toBe("?/?");
     expect(shapeKey({ PK: "session#abc", SK: "Token" })).toBe("?/?");
     expect(shapeKey({ SK: 7 })).toBe("?/?");
+  });
+
+  it("reports a whole key (no #) only when it is a tag the repo writes: an upper-case one could be a code", () => {
+    expect(shapeKey({ PK: "OTP#482913", SK: "KXQRPT" })).toBe("OTP#/?");
+    expect(shapeKey({ PK: "QWERTYSECRET", SK: "ABCDEF" })).toBe("?/?");
+    expect(shapeKey({ PK: "MAILBOX#482913", SK: "META" })).toBe("MAILBOX#/?");
+    expect(shapeKey({ PK: "OTP#482913", SK: "OTP" })).toBe("OTP#/?");
+    expect(shapeKey({ PK: "AGENT", SK: "AGENT_" })).toBe("AGENT/?");
   });
 });
 

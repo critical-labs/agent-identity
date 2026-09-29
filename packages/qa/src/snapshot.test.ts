@@ -75,13 +75,17 @@ describe("loadSnapshot", () => {
         { PK: "NONCE#fp2", SK: "SIG#c2lnMg" },
         { PK: "MAILBOX#482913", SK: "META", note: "n" },
         { PK: "OTP#482913", SK: "731904", code: "731904" },
+        // A letter-only code as a whole key looks like a type tag, but isn't a known one.
+        { PK: "OTP#482914", SK: "KXQRPT", code: "KXQRPT" },
         { PK: "AGENT#fp1", SK: "SESSION#1", token: "t0k3n" },
       ] });
     const { items, dropped } = await loadSnapshot({ stackName: "AgentIdentity", cfn, ddb });
     expect(items).toEqual([agent]);
-    expect(dropped).toEqual({ "AGENT#/SESSION#": 1, "FLEET#/FLEET": 1, "MAILBOX#/META": 1, "NONCE#/SIG#": 2, "OTP#/?": 1 });
+    expect(dropped).toEqual({ "AGENT#/SESSION#": 1, "FLEET#/FLEET": 1, "MAILBOX#/?": 1, "NONCE#/SIG#": 2, "OTP#/?": 2 });
     const report = JSON.stringify(dropped);
-    for (const value of ["fp1", "fp2", "c2lnMQ", "9f86d081", "482913", "731904", "t0k3n"]) expect(report).not.toContain(value);
+    for (const value of ["fp1", "fp2", "c2lnMQ", "9f86d081", "482913", "482914", "731904", "KXQRPT", "t0k3n"]) {
+      expect(report).not.toContain(value);
+    }
   });
 
   it("handles an empty table", async () => {
