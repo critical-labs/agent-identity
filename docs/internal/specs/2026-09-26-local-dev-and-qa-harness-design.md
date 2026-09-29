@@ -62,16 +62,25 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
 - **`snapshot.ts`:** `loadSnapshot({ stackName, cfn, ddb })`.
   - It gets the table's physical name from CloudFormation (`DescribeStackResources`, logical id starting `Table`), then runs a **read-only** paginated `Scan`.
   - It returns the items after `redactItem`, holding them only in memory.
-  - It runs once per conductor process and is memoized: the first pane's seed triggers it, and later sessions reuse it until restart. Clients use the default credential chain, which is the reviewer's AWS profile.
-- **`redact.ts`:** `redactItem(item)`, a pure function returning the item to keep or `null`.
-  - **Dropped:** items whose `PK` starts with `FLEET#`, `ADMINKEY#`, `VIEWER#` or `NONCE#`.
-  - **Emails** (`PK` `MAILBOX#…`, `SK` `EMAIL#…`):
-    - kept: `PK`, `SK`, `id`, `messageId`, `from`, `receivedAt`, `rawS3Key`, `auth`, `unsolicited`, `expiresAt`, and `subject` with digit runs of 4 or more masked as `••••` and URLs as `[link]`;
-    - replaced: `text` becomes `[redacted for QA]`;
-    - `links` becomes `[]`;
-    - removed: `html` and `bodyS3Key`, and **any attribute not in the keep list**. It's an allowlist, so a future sensitive attribute is dropped by default.
-  - **Everything else** is copied unchanged.
-  - Tests include a "nothing sensitive survives" property: no original `text`, `html`, link, code-like digit run or key-hash item.
+  - It runs once per conductor process and is memoized: the first pane's seed triggers it, and later sessions reuse it until restart. Clients use the default credential chain, which is the reviewer's AWS profile. The region comes from `QA_AWS_REGION` when set; otherwise it comes from the default chain. The prod stack's region is the deploy workflow's `AWS_REGION` variable, and the default chain may not match it.
+- **`redact.ts`:** `redactItem(item)`, a pure function returning the item to keep or `null`. **It fails closed at both levels: item shapes and email attributes are allowlists.** (Revised after review: the first version copied unknown item shapes and masked only ASCII digit runs, which let common code formats through.)
+  - **Item shapes, keyed on (`PK` prefix, `SK`), matching every writer in the repo** (`api/src/db/*`, `admin/src/commands.ts`):
+    - `AGENT#…` + `AGENT`: an agent, copied;
+    - `ADDR#…` + `ADDR`: an address mirror, copied;
+    - `AGENT#…` + `ACT#…`: activity, copied;
+    - `AGENT#…` + `STATUS`: status, copied;
+    - `MAILBOX#…` + `EMAIL#…`: an email, redacted as below.
+    - **Every other shape is dropped.** That covers `FLEET#`, `ADMINKEY#`, `VIEWER#` and `NONCE#` today, and any future record type. `loadSnapshot` reports how many items it dropped, per `PK` prefix and `SK` prefix (the text up to and including the first `#`), so a new legitimate type is noticed and added deliberately. Values are never logged.
+  - **Emails:**
+    - kept: `PK`, `SK`, `id`, `messageId`, `from`, `receivedAt`, `rawS3Key`, `auth`, `unsolicited` and `expiresAt`, plus `subject` masked as below;
+    - replaced: `text` becomes `[redacted for QA]`, and `links` becomes `[]`;
+    - removed: `html`, `bodyS3Key` and **any attribute not in the keep list**.
+  - **Subject masking works on whitespace-separated tokens.** Any token that contains a digit (Unicode `\p{Nd}`, so full-width digits too), or that looks like a host or path (it contains `/`, `@`, or a `.` followed by a letter), becomes `••••`. So do `http(s)://` and `www.` links. Plain words are kept, so `Your verification code is 123 456` becomes `Your verification code is •••• ••••`, `Sign in at login.example.test/magic/k9F` becomes `Sign in at ••••`, and `Welcome to the fleet` is unchanged. Numbers like `PR #12` get masked too; that's an accepted loss of fidelity.
+  - Tests include a "nothing sensitive survives" property:
+    - no original `text`, `html` or link;
+    - no token with a digit, and no host/path token, left in any subject;
+    - no item of an unlisted shape;
+    - the corpus includes `123 456`, `123-456`, `12 34 56`, `1.2.3.4.5.6`, `X4K-9PQ`, `AB12CD`, full-width digits and scheme-less links.
 - **`seed.ts`:** `createSeed({ snapshot })` → `{ databases: ['agent-identity-qa'], seedPane({ db }) }`. It runs `ensureTable(localClient(db), db.tableName)`, then batch-writes in chunks of 25, retrying `UnprocessedItems` with backoff and failing after a bounded number of attempts.
   - `ensureTable` is imported from `@agent-identity/api`, which exports it along with `TABLE_KEYS`, so the seed and the dev server share the schema code.
 - **`env.ts`:** `derivePaneEnv({ prodEnv, pane })` → `{ api: {…} }`, with exactly these keys:
