@@ -55,7 +55,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - `command({ port })` → `{ cmd: javaBinary, args: ['-Djava.library.path=<home>/DynamoDBLocal_lib', '-jar', '<home>/DynamoDBLocal.jar', '-inMemory', '-sharedDb', '-disableTelemetry', '-port', String(port)], cwd: home }`.
   - `ready({ port, signal })` polls `ListTables` with a short per-call timeout until it succeeds or the signal aborts.
   - `handle({ port })` → `{ dsn: 'http://127.0.0.1:<port>', db: { endpoint, tableName: 'agent-identity-qa', region: 'us-east-1' } }`.
-  - `localClient(db)` builds a `DynamoDBClient` with that endpoint, region `us-east-1` and the fixed dummy credentials `local` / `local`. Every harness-side call uses it, and the pane env uses the same values. With `-sharedDb`, credentials don't partition the data anyway.
+  - `localClient(db)` builds a `DynamoDBClient` with that endpoint, region `us-east-1` and the fixed dummy credentials `local` / `local`. Every harness-side call uses it, and the pane env uses the same values. With `-sharedDb`, credentials don't partition the data anyway. It refuses any endpoint that isn't loopback `http:`, so a harness-side write can never reach a real table.
 - **`firewall.ts`:** `assertJavaInboundBlocked(javaBinary)`.
   - On `darwin`, it runs `/usr/libexec/ApplicationFirewall/socketfilterfw --getglobalstate` and `--getappblocked <java>`. The firewall must be enabled and the output must say the app is blocked. Otherwise it throws an error containing the exact `sudo socketfilterfw --add … --blockapp …` commands to run. Parsing is a pure function with tests.
   - On other platforms it throws "unsupported platform: bind a host firewall rule for DynamoDB Local and set QA_ALLOW_UNFIREWALLED=1". The environment variable is the explicit override.
@@ -87,7 +87,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   1. Mint `randomBytes(32).toString('hex')`.
   2. `PutItem` `{ PK: 'VIEWER#' + sha256hex(key), SK: 'VIEWER', label: 'qa', createdAt }` into the pane table via `localClient(db)`. This must be the same hash scheme as `AgentsRepo.verifyViewerKey`; a test asserts it round-trips through the real repo.
   3. Return `{ landingUrl: \`${pane.publicOrigin}/ui/?api=${encodeURIComponent(pane.publicOrigin)}#key=${key}\` }`. The harness appends `&qa=…` to the fragment, and the dashboard reads `#key` with `URLSearchParams`.
-- **`adapters.ts`:** `createQaAdapters({ cfg, github, cacheDir })` composes everything:
+- **`adapters.ts`:** `createQaAdapters({ cfg, github, cacheDir, java })` → `{ adapters, readBaseEnv }` composes everything. `java` is the binary `javaBinary()` resolved (the one the firewall check passed), because the provisioner calls `database.command` synchronously while resolving Java is async:
   - **build:** `createWorktreeBuild` with:
     - `repo`, `cacheDir: <cache>/build`, `github`, `baseRef`;
     - `trust: { logins: <QA_TRUSTED_LOGINS> }` (the other trust defaults stay: associations plus `requirePush`, and forks allowed);
@@ -98,6 +98,7 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
     - `command: ({ ref, port }) => ({ cmd: join(ref, 'node_modules/.bin/tsx'), args: ['packages/api/src/dev.ts'], cwd: ref })`. This is direct, never through pnpm, per the launch contract.
     - `healthPath: '/ui/'` and `healthy: s => s === 200`.
   - **seed, envTransform, auth:** from the modules above.
+  - **`readBaseEnv`:** `MAIL_DOMAIN`, `PUBLIC_REPOS` and `AUTO_CAPABILITIES` from the config.
 - **`serve.ts`:** the `pnpm qa` entry.
   1. Load the config, then run `assertJavaInboundBlocked` and check the DynamoDB Local install. Each failure prints how to fix it and exits non-zero.
   2. Create the GitHub client with qa-conductor's `createGithub` and the configured labels.
