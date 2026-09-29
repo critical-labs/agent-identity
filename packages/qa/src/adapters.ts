@@ -67,7 +67,9 @@ export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot }: {
     adapters: {
       build,
       provisioner,
-      seed: createSeed({ snapshot: createSnapshotLoader({ stackName: app.stackName, onLoaded: onSnapshot }) }),
+      seed: createSeed({
+        snapshot: createSnapshotLoader({ stackName: app.stackName, region: app.awsRegion, onLoaded: onSnapshot }),
+      }),
       envTransform: { derivePaneEnv },
       auth: createAuth(),
     },

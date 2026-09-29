@@ -2,7 +2,7 @@ import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/cl
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
 import { mockClient } from "aws-sdk-client-mock";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_TEXT } from "./redact.js";
 import { createSnapshotLoader, describeSnapshot, findTableName, loadSnapshot, memoize } from "./snapshot.js";
 
@@ -21,6 +21,9 @@ beforeEach(() => {
   cfnMock.reset();
   docMock.reset();
   cfnMock.on(DescribeStackResourcesCommand).resolves({ StackResources: resources as never });
+});
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe("findTableName", () => {
@@ -125,6 +128,31 @@ describe("createSnapshotLoader", () => {
     expect(await snapshot()).toEqual([agent()]);
     expect(cfnMock.commandCalls(DescribeStackResourcesCommand)).toHaveLength(1);
     expect(docMock.commandCalls(ScanCommand)).toHaveLength(1);
+  });
+
+  // The region each client was actually built with: `thisValue` is the
+  // client instance whose (mocked) send the call went through.
+  async function clientRegions() {
+    const [cfnCall] = cfnMock.commandCalls(DescribeStackResourcesCommand);
+    const [scanCall] = docMock.commandCalls(ScanCommand);
+    return {
+      cfn: await (cfnCall.thisValue as CloudFormationClient).config.region(),
+      ddb: await (scanCall.thisValue as DynamoDBDocumentClient).config.region(),
+    };
+  }
+
+  it("uses QA_AWS_REGION for both the CloudFormation and the DynamoDB client", async () => {
+    vi.stubEnv("AWS_REGION", "ap-southeast-2");
+    docMock.on(ScanCommand).resolves({ Items: [] });
+    await createSnapshotLoader({ stackName: "AgentIdentity", region: "eu-west-1" })();
+    expect(await clientRegions()).toEqual({ cfn: "eu-west-1", ddb: "eu-west-1" });
+  });
+
+  it("otherwise leaves the region to the default chain", async () => {
+    vi.stubEnv("AWS_REGION", "ap-southeast-2");
+    docMock.on(ScanCommand).resolves({ Items: [] });
+    await createSnapshotLoader({ stackName: "AgentIdentity" })();
+    expect(await clientRegions()).toEqual({ cfn: "ap-southeast-2", ddb: "ap-southeast-2" });
   });
 
   it("hands each snapshot, with its drop report, to onLoaded once", async () => {

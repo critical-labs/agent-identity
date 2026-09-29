@@ -40,16 +40,24 @@ describe("loadQaConfig", () => {
       "QA_TRUSTED_LOGINS= alice , Bob ,,",
       "QA_BASE_REF=release",
       "QA_STACK_NAME=AgentIdentityStaging",
+      "QA_AWS_REGION=eu-west-1",
     ]));
     expect(cfg.repo).toBe("someone/agent-identity");
-    expect(cfg.app).toEqual({
+    expect(cfg.app).toStrictEqual({
       mailDomain: "mail.example.test",
       publicRepos: "o/a,o/b",
       autoCapabilities: "email",
       trustedLogins: ["alice", "Bob"],
       baseRef: "release",
       stackName: "AgentIdentityStaging",
+      awsRegion: "eu-west-1",
     });
+  });
+
+  it("leaves the AWS region to the default chain unless QA_AWS_REGION is set", () => {
+    expect(loadQaConfig(envFile(minimal)).app.awsRegion).toBeUndefined();
+    expect(loadQaConfig(envFile([...minimal, "QA_AWS_REGION="])).app.awsRegion).toBeUndefined();
+    expect(loadQaConfig(envFile([...minimal, "QA_AWS_REGION=us-west-2"])).app.awsRegion).toBe("us-west-2");
   });
 
   it("lets an explicitly empty QA_TRUSTED_LOGINS trust write access alone", () => {

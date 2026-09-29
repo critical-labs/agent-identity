@@ -145,6 +145,13 @@ describe("seed, envTransform, auth and the base env", () => {
     expect(adapters.seed.databases).toEqual(["agent-identity-qa"]);
   });
 
+  it("scans in QA_AWS_REGION when set, else in the default chain's region", () => {
+    setup(["QA_AWS_REGION=eu-west-1"]);
+    expect(vi.mocked(createSnapshotLoader).mock.calls[0][0].region).toBe("eu-west-1");
+    setup();
+    expect(vi.mocked(createSnapshotLoader).mock.calls[1][0].region).toBeUndefined();
+  });
+
   it("hands every loaded snapshot, with its drop report, to onSnapshot", () => {
     const onSnapshot = vi.fn();
     setup([], onSnapshot);

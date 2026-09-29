@@ -214,8 +214,9 @@ You need macOS (for other platforms, see step 2), Node 22+, Java 17+, and AWS cr
    # QA_TRUSTED_LOGINS=critical-agent-zero
    # QA_BASE_REF=main
    # QA_STACK_NAME=AgentIdentity
+   # QA_AWS_REGION=us-east-1             # the production stack's region
    ```
-   The token is the **reviewer's**, never an agent's: agents contribute with read-only access. `QA_MAIL_DOMAIN` is the production domain so the dashboard's mail-address redaction behaves as it does in production.
+   The token is the **reviewer's**, never an agent's: agents contribute with read-only access. `QA_MAIL_DOMAIN` is the production domain so the dashboard's mail-address redaction behaves as it does in production. `QA_AWS_REGION` is the region the snapshot reads the stack and table in: set it to the deploy workflow's `AWS_REGION` variable. Without it, your AWS profile's default region is used, which may not be the stack's.
 4. **Run it** with your AWS profile active: `pnpm qa`, then open `http://127.0.0.1:3100/`, pick a PR and boot it. Ctrl-C tears both panes down.
 
 **Whose PRs can boot.** Booting a PR runs its code on your machine, as you. The trust gate lets a PR boot only when its author has write access to this repo or is listed in `QA_TRUSTED_LOGINS` (default `critical-agent-zero`; set it empty to trust write access alone), and its head is in this repo or the author's own fork. Listing a login is a local decision to run that author's PRs; it grants nothing on GitHub. Installs use CI's pnpm major (`npx pnpm@9.15.9 install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`), and each pane runs with only `PATH` plus its own settings (dummy AWS credentials, its local table, the mail domain), bound to `127.0.0.1`.

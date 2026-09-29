@@ -26,6 +26,9 @@ export interface QaAppConfig {
   trustedLogins: string[];
   baseRef: string;
   stackName: string;
+  /** The prod stack's region (QA_AWS_REGION) for the snapshot's clients;
+   *  undefined leaves it to the default chain. */
+  awsRegion?: string;
 }
 
 export interface QaConfig extends ConductorConfig {
@@ -44,6 +47,7 @@ function appConfig(env: Record<string, string>): QaAppConfig {
     trustedLogins: list(env.QA_TRUSTED_LOGINS ?? DEFAULT_TRUSTED_LOGINS),
     baseRef: env.QA_BASE_REF || "main",
     stackName: env.QA_STACK_NAME || "AgentIdentity",
+    ...(env.QA_AWS_REGION ? { awsRegion: env.QA_AWS_REGION } : {}),
   };
 }
 

@@ -46,7 +46,8 @@ C1 is useful without QA: it's the first way to run the API and dashboard locally
   - `QA_PUBLIC_REPOS` and `QA_AUTO_CAPABILITIES` (optional);
   - `QA_TRUSTED_LOGINS`, comma-separated, defaulting to `critical-agent-zero`;
   - `QA_BASE_REF`, defaulting to `main`;
-  - `QA_STACK_NAME`, defaulting to `AgentIdentity`.
+  - `QA_STACK_NAME`, defaulting to `AgentIdentity`;
+  - `QA_AWS_REGION` (optional; the prod stack's region for the snapshot, see `snapshot.ts`).
 
   The GitHub token must be able to comment and label on this repo. It's the reviewer's token, **not** the agent's, since the agent is read-only.
 - **`dynamodb-local.ts`:** the `database` plugin for `createProcessProvisioner`, plus install helpers.

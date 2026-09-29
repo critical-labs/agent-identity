@@ -1,7 +1,8 @@
 // The QA panes' data: one read-only Scan of the real table, redacted item by
 // item, held only in this process's memory. The clients use the default
-// credential chain, i.e. the reviewer's own AWS profile; those credentials
-// never leave the harness process (panes get dummy ones).
+// credential chain, i.e. the reviewer's own AWS profile, and QA_AWS_REGION
+// when set; those credentials never leave the harness process (panes get
+// dummy ones).
 import { CloudFormationClient, DescribeStackResourcesCommand } from "@aws-sdk/client-cloudformation";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, ScanCommand } from "@aws-sdk/lib-dynamodb";
@@ -82,14 +83,20 @@ export function memoize<T>(load: () => Promise<T>): () => Promise<T> {
 
 /** The seed's snapshot: scanned on the first pane's seed, then reused by
  *  every pane until the conductor restarts. `onLoaded` sees each snapshot,
- *  with its drop report, once. */
-export function createSnapshotLoader({ stackName, onLoaded }: {
+ *  with its drop report, once.
+ *
+ *  `region` (QA_AWS_REGION) is the prod stack's region, for both clients.
+ *  Without it the default chain decides, which may not be the region the
+ *  deploy workflow uses. */
+export function createSnapshotLoader({ stackName, region, onLoaded }: {
   stackName: string;
+  region?: string;
   onLoaded?: (snapshot: Snapshot) => void;
 }): () => Promise<Item[]> {
   return memoize(async () => {
-    const cfn = new CloudFormationClient({});
-    const client = new DynamoDBClient({});
+    const config = region ? { region } : {};
+    const cfn = new CloudFormationClient(config);
+    const client = new DynamoDBClient(config);
     try {
       const snapshot = await loadSnapshot({ stackName, cfn, ddb: DynamoDBDocumentClient.from(client) });
       onLoaded?.(snapshot);
