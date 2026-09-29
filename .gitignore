@@ -3,6 +3,7 @@ node_modules/
 cdk.out/
 *.tsbuildinfo
 .env
+.env.qa
 .claude/
 .mcp.json
 packages/dist/dist/
