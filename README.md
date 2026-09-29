@@ -191,6 +191,40 @@ If the deploy job fails at `configure-aws-credentials`, the usual cause is a tru
 
 The API reads the same variables as the Lambda (`FLEET_KEY_REQUIRED`, `PUBLIC_REPOS`, `AUTO_CAPABILITIES`, `RETENTION_DAYS`). Mail bodies large enough to have been stored in S3 show a placeholder, because there's no S3 locally.
 
+### Side-by-side PR QA
+
+`pnpm qa` lets a reviewer try a pull request against real fleet data before merging it. It runs [qa-conductor](https://github.com/critical-labs/qa-conductor) locally: the harness on `http://127.0.0.1:3100/`, with two panes side by side, **base** (`main`) and **PR**. Each pane is its own dev server (the API plus the fleet dashboard) with its own in-memory DynamoDB Local, seeded from a redacted snapshot of the production table. From the harness you post a verdict (a comment plus a `qa-approved` or `qa-changes-requested` label) back to the PR.
+
+You need macOS (for other platforms, see step 2), Node 22+, Java 17+, and AWS credentials that can read the production stack (`cloudformation:DescribeStackResources` and `dynamodb:Scan` on its table).
+
+1. **Install DynamoDB Local** once: `pnpm qa:setup`. It downloads AWS's tarball, refuses it unless its SHA-256 matches the pin in `packages/qa/src/dynamodb-local.ts`, and extracts it under `~/.cache/qa-conductor/agent-identity/` (or `$XDG_CACHE_HOME`). It then checks Java and the firewall rule.
+2. **Block inbound connections to Java.** DynamoDB Local has no bind option, so it listens on every interface, and the panes hold real (if redacted) fleet data. `pnpm qa` refuses to start unless the macOS application firewall is on and blocks the exact Java binary the panes run. When the rule is missing, both commands print the fix, which is of this form:
+   ```bash
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --add <java>
+   sudo /usr/libexec/ApplicationFirewall/socketfilterfw --blockapp <java>
+   ```
+   Loopback traffic between the harness and the panes isn't affected. On other platforms there's no check: bind your own host firewall rule for Java, then set `QA_ALLOW_UNFIREWALLED=1`.
+3. **Create `.env.qa`** at the repo root (it's gitignored; `QA_ENV_FILE` points elsewhere):
+   ```bash
+   GITHUB_QA_TOKEN=<your token: read PRs, comment and label on this repo>
+   QA_MAIL_DOMAIN=<the production mail domain>
+   # optional:
+   # QA_PUBLIC_REPOS=owner/repo,...      # as the Lambda's PUBLIC_REPOS
+   # QA_AUTO_CAPABILITIES=...            # as the Lambda's AUTO_CAPABILITIES
+   # QA_TRUSTED_LOGINS=critical-agent-zero
+   # QA_BASE_REF=main
+   # QA_STACK_NAME=AgentIdentity
+   ```
+   The token is the **reviewer's**, never an agent's: agents contribute with read-only access. `QA_MAIL_DOMAIN` is the production domain so the dashboard's mail-address redaction behaves as it does in production.
+4. **Run it** with your AWS profile active: `pnpm qa`, then open `http://127.0.0.1:3100/`, pick a PR and boot it. Ctrl-C tears both panes down.
+
+**Whose PRs can boot.** Booting a PR runs its code on your machine, as you. The trust gate lets a PR boot only when its author has write access to this repo or is listed in `QA_TRUSTED_LOGINS` (default `critical-agent-zero`; set it empty to trust write access alone), and its head is in this repo or the author's own fork. Listing a login is a local decision to run that author's PRs; it grants nothing on GitHub. Installs use CI's pnpm major (`npx pnpm@9.15.9 install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`), and each pane runs with only `PATH` plus its own settings (dummy AWS credentials, its local table, the mail domain), bound to `127.0.0.1`.
+
+**What the panes see.** On the first boot, the harness scans the production table once, read-only, with your AWS credentials. It keeps the snapshot in memory only (never on disk) until you stop `pnpm qa`. Before anything reaches a pane:
+- fleet, admin and viewer key hashes and replay nonces are dropped (each pane mints its own viewer key, which the harness passes to the dashboard in the URL fragment);
+- emails keep their sender, dates, authentication verdicts and subject, with digit runs of 4 or more shown as `••••` and URLs as `[link]`. The body becomes `[redacted for QA]`, links are emptied, and HTML and every other attribute are dropped;
+- everything else (agents, address mirrors, activity and status) is copied as is.
+
 ### Releasing to npm
 
 Bump `version` in `packages/dist/package.json`, commit, then tag and push:
