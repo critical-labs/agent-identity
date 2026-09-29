@@ -220,10 +220,10 @@ You need macOS (for other platforms, see step 2), Node 22+, Java 17+, and AWS cr
 
 **Whose PRs can boot.** Booting a PR runs its code on your machine, as you. The trust gate lets a PR boot only when its author has write access to this repo or is listed in `QA_TRUSTED_LOGINS` (default `critical-agent-zero`; set it empty to trust write access alone), and its head is in this repo or the author's own fork. Listing a login is a local decision to run that author's PRs; it grants nothing on GitHub. Installs use CI's pnpm major (`npx pnpm@9.15.9 install --frozen-lockfile --ignore-scripts --ignore-pnpmfile`), and each pane runs with only `PATH` plus its own settings (dummy AWS credentials, its local table, the mail domain), bound to `127.0.0.1`.
 
-**What the panes see.** On the first boot, the harness scans the production table once, read-only, with your AWS credentials. It keeps the snapshot in memory only (never on disk) until you stop `pnpm qa`. Before anything reaches a pane:
-- fleet, admin and viewer key hashes and replay nonces are dropped (each pane mints its own viewer key, which the harness passes to the dashboard in the URL fragment);
-- emails keep their sender, dates, authentication verdicts and subject, with digit runs of 4 or more shown as `••••` and URLs as `[link]`. The body becomes `[redacted for QA]`, links are emptied, and HTML and every other attribute are dropped;
-- everything else (agents, address mirrors, activity and status) is copied as is.
+**What the panes see.** On the first boot, the harness scans the production table once, read-only, with your AWS credentials. It keeps the snapshot in memory only (never on disk) until you stop `pnpm qa`. The redaction fails closed: both the kinds of item and the email attributes that reach a pane are allowlists.
+- Agents, address mirrors, activity and status are copied as is.
+- Emails keep their sender, dates, authentication verdicts and subject. In the subject, every word that contains a digit or looks like a host, path, address or link is shown as `••••`, so `Your code is 123 456` becomes `Your code is •••• ••••`. The body becomes `[redacted for QA]`, links are emptied, and HTML and every other attribute are dropped.
+- **Everything else is dropped**: fleet, admin and viewer key hashes, replay nonces, and any kind of item added later. Each pane mints its own viewer key, which the harness passes to the dashboard in the URL fragment. `pnpm qa` logs how many items it dropped per kind (key prefixes only, never values), so a new kind that panes should see can be added to `packages/qa/src/redact.ts` deliberately.
 
 ### Releasing to npm
 
