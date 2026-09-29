@@ -37,8 +37,16 @@ export interface QaConfig extends ConductorConfig {
 
 const list = (value: string) => value.split(",").map((s) => s.trim()).filter(Boolean);
 
+/** An AWS region name (us-east-1, us-gov-west-1…). The env file parser keeps
+ *  an inline `# comment` as part of the value, so checking here makes such a
+ *  line fail at startup rather than at the first pane's snapshot. */
+const AWS_REGION = /^[a-z]{2}(-[a-z]+)+-\d+$/;
+
 /** agent-identity's own keys, from the raw `.env.qa` map. */
 function appConfig(env: Record<string, string>): QaAppConfig {
+  if (env.QA_AWS_REGION && !AWS_REGION.test(env.QA_AWS_REGION)) {
+    throw new Error(`QA_AWS_REGION must be an AWS region like us-east-1, not ${JSON.stringify(env.QA_AWS_REGION)}`);
+  }
   return {
     mailDomain: env.QA_MAIL_DOMAIN,
     publicRepos: env.QA_PUBLIC_REPOS ?? "",

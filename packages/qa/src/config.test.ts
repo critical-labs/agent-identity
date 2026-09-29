@@ -58,6 +58,19 @@ describe("loadQaConfig", () => {
     expect(loadQaConfig(envFile(minimal)).app.awsRegion).toBeUndefined();
     expect(loadQaConfig(envFile([...minimal, "QA_AWS_REGION="])).app.awsRegion).toBeUndefined();
     expect(loadQaConfig(envFile([...minimal, "QA_AWS_REGION=us-west-2"])).app.awsRegion).toBe("us-west-2");
+    expect(loadQaConfig(envFile([...minimal, "QA_AWS_REGION=us-gov-west-1"])).app.awsRegion).toBe("us-gov-west-1");
+  });
+
+  it("refuses a QA_AWS_REGION that isn't a region, such as one carrying an inline comment", () => {
+    // The env file parser keeps an inline comment as part of the value.
+    for (const line of [
+      "QA_AWS_REGION=us-east-1             # the production stack's region",
+      "QA_AWS_REGION=US-EAST-1",
+      "QA_AWS_REGION=us-east",
+      "QA_AWS_REGION=https://dynamodb.us-east-1.amazonaws.com",
+    ]) {
+      expect(() => loadQaConfig(envFile([...minimal, line]))).toThrow(/QA_AWS_REGION must be an AWS region like us-east-1/);
+    }
   });
 
   it("lets an explicitly empty QA_TRUSTED_LOGINS trust write access alone", () => {
