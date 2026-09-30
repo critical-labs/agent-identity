@@ -36,6 +36,17 @@ describe("cors", () => {
   });
 });
 
+describe("api function sizing", () => {
+  it("gives the API Lambda room for its full-table fleet scans (not the 128 MB / 3s defaults)", () => {
+    const fns = synth().findResources("AWS::Lambda::Function");
+    const api = Object.entries(fns).filter(([id]) => id.startsWith("Api"));
+    expect(api).toHaveLength(1);
+    const props = api[0][1].Properties as { Timeout?: number; MemorySize?: number };
+    expect(props.Timeout).toBe(10);
+    expect(props.MemorySize).toBe(512);
+  });
+});
+
 describe("api throttling", () => {
   it("throttles the default stage by default", () => {
     synth().hasResourceProperties("AWS::ApiGatewayV2::Stage", {
