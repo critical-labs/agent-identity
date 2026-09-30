@@ -83,6 +83,12 @@ export class AgentIdentityStack extends Stack {
     const apiFn = new NodejsFunction(this, "Api", {
       ...fnDefaults,
       entry: pkg("api/src/lambda.ts"),
+      // The fleet routes scan the whole table (activity.ts scanAll). At the
+      // Lambda defaults (128 MB, 3s) those scans outgrew the timeout as the
+      // table grew, and API Gateway turned every timeout into a 500. Memory
+      // also buys CPU on Lambda; stay well under API Gateway's 30s limit.
+      timeout: Duration.seconds(10),
+      memorySize: 512,
       environment: {
         ...commonEnv,
         // Repos the UNAUTHENTICATED public fleet tier may mention:
