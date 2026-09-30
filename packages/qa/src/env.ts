@@ -1,7 +1,9 @@
 import type { Pane, PaneEnv } from "@critical-labs/qa-conductor";
 import { LOCAL_CREDENTIALS, QA_REGION, QA_TABLE, type PaneDb } from "./dynamodb-local.js";
 
-/** The deployment settings a pane copies from prod, from the QA config. */
+/** The deployment settings a pane copies from prod: the lists from the QA
+ *  config, and the mail domain readBaseEnv resolved (QA_MAIL_DOMAIN, else
+ *  the snapshot's). */
 export function prodEnvFrom(app: { mailDomain: string; publicRepos: string; autoCapabilities: string }): Record<string, string> {
   return { MAIL_DOMAIN: app.mailDomain, PUBLIC_REPOS: app.publicRepos, AUTO_CAPABILITIES: app.autoCapabilities };
 }

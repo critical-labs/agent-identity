@@ -8,7 +8,7 @@ import type { QaConfig } from "./config.js";
 import { assertInstalled, createDynamoDbLocal, ddbLocalHome } from "./dynamodb-local.js";
 import { derivePaneEnv, prodEnvFrom } from "./env.js";
 import { createSeed } from "./seed.js";
-import { createSnapshotLoader, type Snapshot } from "./snapshot.js";
+import { createSnapshotLoader, describeMailDomain, type Snapshot } from "./snapshot.js";
 
 /** The same pnpm major as CI. Scripts and pnpmfiles never run: installing a
  *  PR must not execute its code (or its dependencies') before the reviewer
@@ -28,7 +28,10 @@ const INSTALL = {
  *  `onSnapshot` sees each prod snapshot, with its drop report, once.
  *
  *  `verifyInstall` runs before each pane's emulator starts; by default it
- *  re-checks every DynamoDB Local file against the pins in source. */
+ *  re-checks every DynamoDB Local file against the pins in source.
+ *
+ *  `readBaseEnv`'s MAIL_DOMAIN is QA_MAIL_DOMAIN when set, else the domain
+ *  the snapshot derives from the agents' addresses. */
 export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot, verifyInstall }: {
   cfg: QaConfig;
   github: Github;
@@ -81,16 +84,29 @@ export function createQaAdapters({ cfg, github, cacheDir, java, onSnapshot, veri
     },
   };
 
+  // One memoized snapshot for the seed's items and the base env's mail
+  // domain: whichever asks first scans prod, and the other reuses the scan.
+  const snapshot = createSnapshotLoader({ stackName: app.stackName, region: app.awsRegion, onLoaded: onSnapshot });
+
+  // The override wins without waiting for a scan. The domain is never put
+  // in an error or a log line: logs may be pasted publicly.
+  async function mailDomain(): Promise<string> {
+    if (app.mailDomain) return app.mailDomain;
+    const loaded = await snapshot();
+    if (loaded.mailDomain === null) {
+      throw new Error(`the mail domain is ${describeMailDomain(loaded)}: set QA_MAIL_DOMAIN in .env.qa and restart pnpm qa`);
+    }
+    return loaded.mailDomain;
+  }
+
   return {
     adapters: {
       build,
       provisioner,
-      seed: createSeed({
-        snapshot: createSnapshotLoader({ stackName: app.stackName, region: app.awsRegion, onLoaded: onSnapshot }),
-      }),
+      seed: createSeed({ snapshot: async () => (await snapshot()).items }),
       envTransform: { derivePaneEnv },
       auth: createAuth(),
     },
-    readBaseEnv: async () => prodEnvFrom(app),
+    readBaseEnv: async () => prodEnvFrom({ ...app, mailDomain: await mailDomain() }),
   };
 }

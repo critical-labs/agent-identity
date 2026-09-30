@@ -26,6 +26,8 @@ await check("node", () => {
   if (major < 22) throw new Error(`qa-conductor needs Node 22 or later; this is ${process.versions.node}`);
 });
 const envFile = qaEnvFile();
+// QA_MAIL_DOMAIN is optional: without it, the panes' mail domain comes from
+// the snapshot, so it can only be missing once the first pane boots.
 const cfg = await check("config", () => loadQaConfig(envFile), `create or fix ${envFile}: see README "Side-by-side PR QA"`);
 const cacheDir = qaCacheDir();
 const java = await check("java", () => javaBinary());
@@ -39,9 +41,12 @@ const github = createGithub({
   repo: cfg.repo,
   qaLabels: [cfg.verdictLabels.accept, cfg.verdictLabels.reject],
 });
-// Once per snapshot: what the panes get, and what was dropped per kind of
-// item (key prefixes only, never values).
-const onSnapshot = (snapshot: Snapshot) => console.log(`[qa] ${describeSnapshot(snapshot)}`);
+// Once per snapshot: what the panes get, what was dropped per kind of item
+// (key prefixes only, never values), and where the mail domain comes from
+// (counts only, never the domain), with a warning when QA_MAIL_DOMAIN
+// matches at most half of the agents' addresses.
+const onSnapshot = (snapshot: Snapshot) =>
+  console.log(`[qa] ${describeSnapshot(snapshot, { mailDomainOverride: cfg.app.mailDomain })}`);
 const { adapters, readBaseEnv } = createQaAdapters({ cfg, github, cacheDir, java, onSnapshot });
 const conductor = startConductor({ cfg, github, fsx: { readFile: (path) => readFile(path) }, adapters, readBaseEnv });
 
