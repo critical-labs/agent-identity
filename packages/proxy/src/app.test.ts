@@ -2,7 +2,7 @@ import type { AgentRecord, NoncesRepo } from "@agent-identity/api";
 import {
   canonicalString, generateKeypair, sign,
   type ActivityEvent, type BlobSpec, type CommitChangesSpec, type CommitSpec,
-  type PrSpec, type RepoRef, type RepoVisibility,
+  type PrSpec, type RepoRef, type RepoVisibility, type SyncResult,
 } from "@agent-identity/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createProxyApp, type ProxyDeps } from "./app.js";
@@ -71,6 +71,16 @@ export class FakeForge implements Forge {
     this.calls.push(["fork", ref, actor]);
     if (this.failWith) throw this.failWith;
     return { owner: "fork-acct", repo: ref.name, defaultBranch: "main" };
+  }
+  // Overridable so a test can hand the route a result with unexpected keys.
+  syncResult?: SyncResult;
+  async syncFork(ref: RepoRef, branch: string, actor: Author) {
+    this.calls.push(["syncFork", ref, branch, actor]);
+    if (this.failWith) throw this.failWith;
+    return this.syncResult ?? {
+      mergeType: "fast-forward" as const, baseBranch: "critical-labs:main",
+      message: "Successfully fetched and fast-forwarded from upstream critical-labs:main",
+    };
   }
   // Visibility knob: a single value, or per-ref for fork tests.
   visibility: RepoVisibility | ((ref: RepoRef) => RepoVisibility) = "public";
@@ -464,6 +474,135 @@ describe("POST /forge/:service/fork", () => {
     const body = JSON.stringify({ owner: "o" });
     const res = await app.request(path, { ...signed("POST", path, body), body });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("POST /forge/:service/sync", () => {
+  const path = "/forge/github/sync";
+
+  it("syncs the named fork branch via the adapter and writes a forge_sync event with the stamp", async () => {
+    const ledger = new FakeLedger();
+    const { deps, forge } = makeDeps({ activity: ledger });
+    const app = createProxyApp(deps);
+    const body = JSON.stringify({ owner: "fork-acct", repo: "agent-identity", branch: "main" });
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      mergeType: "fast-forward", baseBranch: "critical-labs:main",
+      message: "Successfully fetched and fast-forwarded from upstream critical-labs:main",
+    });
+    const sync = forge.calls.find((c) => c[0] === "syncFork")!;
+    expect(sync).toEqual(["syncFork", { owner: "fork-acct", name: "agent-identity" }, "main",
+      { name: "482913", email: "482913@agents.example" }]);
+    // An explicit branch needs no repo read.
+    expect(forge.calls.some((c) => c[0] === "getRepo")).toBe(false);
+    expect(ledger.events).toHaveLength(1);
+    expect(ledger.events[0]).toEqual(expect.objectContaining({
+      agentId: "482913", class: "attested", type: "forge_sync",
+      summary: "synced fork-acct/agent-identity@main from upstream (fast-forward)",
+      detail: {
+        service: "github", fork: "fork-acct/agent-identity", branch: "main",
+        mergeType: "fast-forward", visibility: "public",
+      },
+    }));
+    expect(ledger.events[0]!.ref).toBeUndefined();
+  });
+
+  it("defaults a missing branch to the fork's default branch, read behind the policy gate", async () => {
+    const ledger = new FakeLedger();
+    const { deps, forge, audit } = makeDeps({ activity: ledger });
+    const app = createProxyApp(deps);
+    const body = JSON.stringify({ owner: "fork-acct", repo: "agent-identity" });
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    const names = forge.calls.map((c) => c[0]);
+    expect(names.indexOf("getRepo")).toBeLessThan(names.indexOf("syncFork"));
+    const sync = forge.calls.find((c) => c[0] === "syncFork")!;
+    expect(sync[1]).toEqual({ owner: "fork-acct", name: "agent-identity" });
+    expect(sync[2]).toBe("main");
+    expect(ledger.events[0]!.summary).toBe("synced fork-acct/agent-identity@main from upstream (fast-forward)");
+    expect(ledger.events[0]!.detail).toEqual(expect.objectContaining({ branch: "main" }));
+    // The audit line — the record that exists even without a ledger — names
+    // the branch that was actually moved and the forge's verdict, since the
+    // op alone cannot carry a branch the caller never sent.
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      op: "sync", owner: "fork-acct", repo: "agent-identity", outcome: "ok",
+      branch: "main", mergeType: "fast-forward",
+    }));
+  });
+
+  it("never lets a route's extra audit fields relabel who did what", async () => {
+    // The sync route's okFields are { branch, mergeType }; a forge that
+    // answered with identity-shaped keys must not reach the audit line
+    // under the base keys, which are spread last.
+    const { deps, forge, audit } = makeDeps();
+    forge.syncResult = {
+      mergeType: "fast-forward", baseBranch: "critical-labs:main", message: "ok",
+      agentId: "someone-else", op: "commit",
+    } as never;
+    const app = createProxyApp(deps);
+    const body = JSON.stringify({ owner: "fork-acct", repo: "agent-identity", branch: "main" });
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "482913", op: "sync", owner: "fork-acct", repo: "agent-identity", outcome: "ok",
+    }));
+  });
+
+  it("stamps private when the fork is not world-readable", async () => {
+    const ledger = new FakeLedger();
+    const { deps, forge } = makeDeps({ activity: ledger });
+    forge.visibility = "private";
+    const app = createProxyApp(deps);
+    const body = JSON.stringify({ owner: "fork-acct", repo: "agent-identity", branch: "main" });
+    await app.request(path, { ...signed("POST", path, body), body });
+    expect(ledger.events[0]!.detail).toEqual(expect.objectContaining({ visibility: "private" }));
+  });
+
+  it("a fork-namespace policy denial touches NOTHING (no read, no sync)", async () => {
+    const { deps, forge, audit } = makeDeps({
+      policy: forkNamespacePolicy({ githubForkOwner: "fork-acct" }),
+    });
+    const app = createProxyApp(deps);
+    const body = JSON.stringify({ owner: "critical-labs", repo: "agent-identity" });
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(403);
+    expect((await res.json()).error).toBe("denied");
+    expect(forge.calls).toHaveLength(0);
+    expect(audit).toHaveBeenCalledWith(expect.objectContaining({
+      op: "sync", owner: "critical-labs", outcome: "denied",
+    }));
+  });
+
+  it("turns the adapter's fork_diverged into a 409 the agent can act on", async () => {
+    const { deps, forge } = makeDeps();
+    forge.failWith = new ForgeError("fork_diverged",
+      "fork-acct/agent-identity@feat is ahead of its upstream and cannot be fast-forwarded; "
+      + "the proxy never merges on the agent's behalf, so start a new branch from the fresh base instead",
+      409);
+    const app = createProxyApp(deps);
+    const body = JSON.stringify({ owner: "fork-acct", repo: "agent-identity", branch: "feat" });
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: "fork_diverged", detail: expect.stringContaining("start a new branch"),
+    });
+  });
+
+  it("400s a malformed sync body, writing nothing", async () => {
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    for (const bad of [
+      { owner: "o" },
+      { owner: "o", repo: "r", branch: "" },
+      { owner: "o", repo: "r", branch: "../main" },
+      { owner: "fork-acct", repo: "proxy/../../critical-labs/agent-identity" },
+    ]) {
+      const bb = JSON.stringify(bad);
+      const res = await app.request(path, { ...signed("POST", path, bb), body: bb });
+      expect(res.status, JSON.stringify(bad)).toBe(400);
+    }
+    expect(forge.calls).toHaveLength(0);
   });
 });
 

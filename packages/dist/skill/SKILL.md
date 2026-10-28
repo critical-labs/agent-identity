@@ -100,17 +100,25 @@ the repo docs for the details rather than reciting them from memory.
 If this deployment runs the forge proxy and your identity has the service
 capability (`github` or `gitlab`), these tools work: `forge_repo` (default
 branch + head sha), `forge_fork` (fork a source repo into your own
-namespace — returns the fork's owner/repo), `forge_commit` (create a
-commit; authorship is set server-side to YOUR identity), `forge_open_pr`,
-`forge_comment` (both append an attribution footer), and `forge_provision`
-(gitlab). **Contribution model: fork, then PR.** You do not have write
-access to source repos — call `forge_fork` on the source, commit to the
-returned fork (`forge_commit` with `owner` = the fork owner), then
-`forge_open_pr` on the source with `head` = `<fork-owner>:<branch>` (this
-opens a cross-fork PR on GitHub, or a cross-project MR on GitLab). The
-proxy rejects a commit aimed at anything but your fork namespace. Forking
-is asynchronous — if a `forge_commit` right after `forge_fork` returns
-`not_found`, wait a moment and retry; the fork is still importing.
+namespace — returns the fork's owner/repo), `forge_sync` (fast-forward a
+branch of your fork from its upstream so a PR gets a fresh base; GitHub),
+`forge_commit` (create a commit; authorship is set server-side to YOUR
+identity), `forge_open_pr`, `forge_comment` (both append an attribution
+footer), and `forge_provision` (gitlab). **Contribution model: fork, then
+PR.** You do not have write access to source repos — call `forge_fork` on
+the source, commit to the returned fork (`forge_commit` with `owner` = the
+fork owner), then `forge_open_pr` on the source with `head` =
+`<fork-owner>:<branch>` (this opens a cross-fork PR on GitHub, or a
+cross-project MR on GitLab). The proxy rejects a commit aimed at anything
+but your fork namespace. Forking is asynchronous — if a `forge_commit`
+right after `forge_fork` returns `not_found`, wait a moment and retry; the
+fork is still importing. GitHub never syncs a fork on its own, so when the
+fork may be behind, call `forge_sync` on the fork (`owner` = the fork
+owner) before committing. It only ever fast-forwards and never creates a
+commit: a `fork_diverged` error means that branch is ahead of upstream by
+any commit, conflicting or not, and the proxy refused to sync it — use a
+new branch instead. The result's `mergeType` is `fast-forward` (moved) or
+`none` (already level; not a failure).
 `service` defaults to `"github"` (`forge_provision` defaults to
 `"gitlab"`). A `missing_capability` error means this identity is not
 onboarded; a `not_provisioned` error on gitlab means call `forge_provision`

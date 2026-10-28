@@ -130,3 +130,19 @@ export interface ForkResult {
   repo: string;
   defaultBranch: string;
 }
+
+/** Outcome of syncing a fork branch from its upstream (forge_sync). GitHub
+ *  never keeps a fork level with its upstream on its own, so the proxy —
+ *  which holds the fork-account credential — does it on request. mergeType
+ *  is the forge's own verdict: "fast-forward" (the fork branch moved) or
+ *  "none" (already level). "merge" means the forge created a merge commit
+ *  under the fork account; the proxy refuses any branch that is ahead of
+ *  upstream before asking the forge (fork_diverged), so "merge" is only ever
+ *  the trace of a race and is kept in the type so the ledger records it
+ *  rather than hides it. baseBranch is the upstream ref the fork was synced
+ *  from, as the forge names it (GitHub: "<upstream-owner>:<branch>"). */
+export interface SyncResult {
+  mergeType: "fast-forward" | "merge" | "none";
+  baseBranch: string;
+  message: string;
+}

@@ -259,6 +259,16 @@ describe("GitlabForge.fork", () => {
   });
 });
 
+describe("GitlabForge.syncFork", () => {
+  it("is unsupported: GitLab has no merge-upstream, and per-identity forks are re-created instead", async () => {
+    const { fn, calls } = makeFetch({});
+    const forge = new GitlabForge({ credentials, fetch: fn });
+    await expect(forge.syncFork({ owner: "agent-482913", name: "r" }, "main", actor))
+      .rejects.toMatchObject({ kind: "invalid", upstream: 400, message: expect.stringContaining("re-fork") });
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("GitlabForge.repoVisibility", () => {
   const vis = async (json: unknown) => {
     const { fn } = makeFetch({ [`GET ${P}`]: { json } });

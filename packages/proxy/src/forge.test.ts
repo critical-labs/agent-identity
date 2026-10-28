@@ -10,6 +10,7 @@ describe("ForgeError", () => {
     expect(statusFor("upstream_auth")).toBe(502);
     expect(statusFor("invalid")).toBe(400);
     expect(statusFor("not_provisioned")).toBe(403);
+    expect(statusFor("fork_diverged")).toBe(409);
   });
 
   it("carries kind and optional upstream status", () => {

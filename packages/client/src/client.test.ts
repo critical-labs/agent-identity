@@ -245,6 +245,23 @@ describe("forge methods", () => {
     expect(JSON.parse(init.body as string)).toEqual({ owner: "o", repo: "r" });
   });
 
+  it("forgeSync posts to the sync path, sending branch only when given", async () => {
+    const result = { mergeType: "fast-forward", baseBranch: "o:main", message: "ok" };
+    const fetchMock = makeFetch(result);
+    const client = new AgentIdentityClient({
+      apiUrl: "https://api.example", keypair: kp, fetch: fetchMock as never,
+    });
+    const r = await client.forgeSync("github", { owner: "fork-acct", name: "r" }, "main");
+    expect(r).toEqual(result);
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.example/forge/github/sync");
+    expect(JSON.parse(init.body as string)).toEqual({ owner: "fork-acct", repo: "r", branch: "main" });
+
+    await client.forgeSync("github", { owner: "fork-acct", name: "r" });
+    const [, init2] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(JSON.parse(init2.body as string)).toEqual({ owner: "fork-acct", repo: "r" });
+  });
+
   it("setStatus posts a claimed status self-report", async () => {
     const fetchMock = makeFetch({ event: {} });
     const client = new AgentIdentityClient({
