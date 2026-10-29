@@ -1,6 +1,6 @@
 {
   "name": "@critical-labs/agent-identity-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "MCP server for agent-identity — single-bin wrapper for npx",
   "license": "MIT",
   "repository": {
@@ -14,6 +14,6 @@
   "engines": { "node": ">=20" },
   "publishConfig": { "access": "public" },
   "dependencies": {
-    "@critical-labs/agent-identity": "^0.3.0"
+    "@critical-labs/agent-identity": "^0.4.0"
   }
 }

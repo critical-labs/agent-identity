@@ -1,6 +1,6 @@
 {
   "name": "@critical-labs/agent-identity",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Persistent, verifiable identities for AI agents: email mailbox, MCP server, session identity pool, and setup CLI",
   "keywords": [
     "ai-agents",
