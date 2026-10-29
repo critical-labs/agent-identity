@@ -8,7 +8,7 @@ import {
   type BlobResult, type CommentResult, type CommitChangesSpec, type CommitResult,
   type CommitSpec, type EmailFull, type EmailSummary, type ForgeProvisionResult,
   type ForkResult, type Keypair, type PrResult, type PrSpec,
-  type RegisterResponse, type RepoInfo, type RepoRef,
+  type RegisterResponse, type RepoInfo, type RepoRef, type SyncResult,
 } from "@agent-identity/shared";
 
 export class NoIdentityError extends Error {}
@@ -28,6 +28,7 @@ export interface AgentClientLike {
   forgeOpenPr(service: string, ref: RepoRef, spec: PrSpec): Promise<PrResult>;
   forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult>;
   forgeFork(service: string, ref: RepoRef): Promise<ForkResult>;
+  forgeSync(service: string, ref: RepoRef, branch?: string): Promise<SyncResult>;
   forgeProvision(service: string): Promise<ForgeProvisionResult>;
 }
 

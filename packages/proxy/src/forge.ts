@@ -1,7 +1,7 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
   ForgeProvisionResult, ForkResult, PrResult, PrSpec,
-  RepoInfo, RepoRef, RepoVisibility,
+  RepoInfo, RepoRef, RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 
 /** The acting identity: name is the agentId, email its mailbox address.
@@ -13,7 +13,7 @@ export interface Author {
 
 export type ForgeErrorKind =
   | "not_found" | "forbidden" | "non_fast_forward" | "rate_limited"
-  | "upstream_auth" | "invalid" | "not_provisioned";
+  | "upstream_auth" | "invalid" | "not_provisioned" | "fork_diverged";
 
 const STATUS: Record<ForgeErrorKind, number> = {
   not_found: 404,
@@ -23,6 +23,11 @@ const STATUS: Record<ForgeErrorKind, number> = {
   upstream_auth: 502,
   invalid: 400,
   not_provisioned: 403,
+  // A fork branch that is ahead of its upstream — by any commit, conflicting
+  // or not — cannot be synced without a merge the proxy refuses to make for
+  // the agent; the agent's remedy is a fresh branch, so this is a conflict,
+  // not a bad request.
+  fork_diverged: 409,
 };
 
 export const statusFor = (kind: ForgeErrorKind): number => STATUS[kind];
@@ -58,6 +63,21 @@ export interface Forge {
   openPullRequest(ref: RepoRef, spec: PrSpec, actor: Author): Promise<PrResult>;
   comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult>;
   fork(ref: RepoRef, actor: Author): Promise<ForkResult>;
+  /** Bring one branch of the identity's FORK level with the same branch on
+   *  its upstream, using the credential the proxy already holds. Exists
+   *  because GitHub never syncs a fork on its own, and a private upstream
+   *  cannot even be read by a fork-scoped token the operator might hand an
+   *  agent — so without this the operator is the only one who can give a PR
+   *  a fresh base. `ref` names the fork, never the source; it is a write to
+   *  the fork and is fork-namespace-pinned by the proxy policy exactly like a
+   *  commit. A sync only ever fast-forwards: a branch that is merely behind
+   *  moves to the upstream head, one already level is a no-op ("none"), and
+   *  one that is ahead of upstream by any commit — conflicting or not — is
+   *  refused with ForgeError("fork_diverged") BEFORE the forge is asked,
+   *  because the forge's own sync would otherwise create a merge commit under
+   *  the shared fork account, outside the authored-and-signed commit path.
+   *  The agent starts a new branch instead. */
+  syncFork(ref: RepoRef, branch: string, actor: Author): Promise<SyncResult>;
   /** The repo's ACTUAL visibility on the forge right now. Adapters answer
    *  "public" ONLY for a world-readable repo; private, internal, and
    *  malformed upstream payloads all collapse to "private". The proxy uses

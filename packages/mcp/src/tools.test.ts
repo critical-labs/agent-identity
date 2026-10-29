@@ -329,6 +329,26 @@ describe("forge tools", () => {
     expect(forgeFork).toHaveBeenCalledWith("github", { owner: "o", name: "r" });
   });
 
+  it("forge_sync delegates with service defaulting to github and branch passed through", async () => {
+    const result = { mergeType: "fast-forward", baseBranch: "o:main", message: "ok" };
+    const forgeSync = vi.fn(async () => result);
+    const tools = makeTools(managerWith({ forgeSync }));
+    expect(await tools.forgeSync({ owner: "fork-acct", repo: "r" })).toEqual(result);
+    expect(forgeSync).toHaveBeenCalledWith("github", { owner: "fork-acct", name: "r" }, undefined);
+    await tools.forgeSync({ service: "gitlab", owner: "agent-1", repo: "r", branch: "feat" });
+    expect(forgeSync).toHaveBeenCalledWith("gitlab", { owner: "agent-1", name: "r" }, "feat");
+  });
+
+  it("forge_sync returns a fork_diverged proxy error as a clean result", async () => {
+    const forgeSync = vi.fn(async () => {
+      throw new Error('API 409: {"error":"fork_diverged","detail":"start a new branch instead"}');
+    });
+    const tools = makeTools(managerWith({ forgeSync }));
+    expect(await tools.forgeSync({ owner: "fork-acct", repo: "r", branch: "feat" })).toEqual({
+      error: 'API 409: {"error":"fork_diverged","detail":"start a new branch instead"}',
+    });
+  });
+
   it("set_status posts the claimed self-report through the client", async () => {
     const setStatus = vi.fn(async () => ({ event: { type: "status" } }));
     const tools = makeTools(managerWith({ setStatus }));

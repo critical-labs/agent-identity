@@ -157,6 +157,25 @@ describe("publicView — forge events", () => {
     expect(JSON.stringify(view)).not.toContain("bot-7");
   });
 
+  it("forge_sync names only the fork and never carries a ref", () => {
+    const sync = (fork: string, visibility = "public") => ev({
+      type: "forge_sync", summary: `synced ${fork}@main from upstream (fast-forward)`,
+      detail: { service: "github", fork, branch: "main", mergeType: "fast-forward", visibility },
+      ref: "https://github.com/critical-labs/core-fork",
+    });
+    const view = publicView([sync("critical-labs/core-fork")], [], ALLOW);
+    expect(view.events).toHaveLength(1);
+    expect(view.events[0]).toEqual(expect.objectContaining({
+      type: "forge_sync",
+      detail: { service: "github", fork: "critical-labs/core-fork", branch: "main", mergeType: "fast-forward" },
+    }));
+    expect(view.events[0]!.ref).toBeUndefined();
+    expect(publicView([sync("bot-7/core")], [], ALLOW).events).toEqual([]);
+    // An allowlisted fork the forge stamped private stays out, as for every
+    // other forge type — the stamp, not the name, is what admits an event.
+    expect(publicView([sync("critical-labs/core-fork", "private")], [], ALLOW).events).toEqual([]);
+  });
+
   it("strips detail fields outside the per-type allowlist", () => {
     const events = [ev({
       type: "forge_commit",

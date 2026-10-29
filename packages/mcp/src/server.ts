@@ -215,5 +215,19 @@ server.registerTool(
   async (args) => json(await tools.forgeFork(args)),
 );
 
+server.registerTool(
+  "forge_sync",
+  {
+    description: "Fast-forward your fork's branch from its upstream so a PR gets a fresh base, using the proxy's own credential (you need no token). Call it before forge_commit when the fork may be behind. owner is the FORK owner (your namespace). branch defaults to the fork's default branch. It only ever fast-forwards and never creates a commit: the proxy refuses any branch that is ahead of upstream — by any commit, conflicting or not — with a fork_diverged error; use a new branch instead. Returns mergeType: 'fast-forward' (branch moved), 'none' (already level), or 'merge' (should not happen: GitHub made a merge commit because a commit landed between the proxy's check and the sync; it is recorded, not hidden). GitHub only (GitLab forks are per identity; re-fork instead). service defaults to github.",
+    inputSchema: {
+      service: z.string().optional(),
+      owner: z.string(),
+      repo: z.string(),
+      branch: z.string().optional(),
+    },
+  },
+  async (args) => json(await tools.forgeSync(args)),
+);
+
 const transport = new StdioServerTransport();
 await server.connect(transport);

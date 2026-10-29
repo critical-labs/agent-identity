@@ -60,6 +60,10 @@ class RealisticForge implements Forge {
   async fork(ref: RepoRef, _actor: Author) {
     return { owner: "fork-acct", repo: ref.name, defaultBranch: "main" };
   }
+  async syncFork(_ref: RepoRef, branch: string, _actor: Author) {
+    assertValidRefname(branch);
+    return { mergeType: "fast-forward" as const, baseBranch: "critical-labs:main", message: "ok" };
+  }
   async repoVisibility(_ref: RepoRef, _actor: Author) {
     return "public" as const;
   }

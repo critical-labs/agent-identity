@@ -341,6 +341,192 @@ describe("GithubForge.fork", () => {
   });
 });
 
+describe("GithubForge.syncFork", () => {
+  const FORK = "https://api.github.com/repos/critical-agent-zero/r";
+  const fork = { owner: "critical-agent-zero", name: "r" };
+  // The fork's parent, as GET /repos/{fork} reports it.
+  const forkRepo = { json: { parent: { owner: { login: "o" } }, default_branch: "main" } };
+  // basehead is "<parent-owner>:<branch>...<branch>", owner and branch each URL-encoded.
+  const compare = (branch: string) => `GET ${FORK}/compare/o:${branch}...${branch}`;
+  const posts = (calls: { init: RequestInit }[]) => calls.filter((c) => c.init.method === "POST");
+
+  it("compares the fork branch to upstream, then POSTs merge-upstream on the FORK and maps the result", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("main")]: { json: { status: "behind", ahead_by: 0, behind_by: 3 } },
+      [`POST ${FORK}/merge-upstream`]: {
+        json: {
+          message: "Successfully fetched and fast-forwarded from upstream o:main",
+          merge_type: "fast-forward", base_branch: "o:main",
+        },
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.syncFork(fork, "main", actor);
+    expect(r).toEqual({
+      mergeType: "fast-forward", baseBranch: "o:main",
+      message: "Successfully fetched and fast-forwarded from upstream o:main",
+    });
+    expect(calls.map((c) => `${c.init.method ?? "GET"} ${c.url}`)).toEqual([
+      `GET ${FORK}`, compare("main"), `POST ${FORK}/merge-upstream`,
+    ]);
+    expect(JSON.parse(calls[2]!.init.body as string)).toEqual({ branch: "main" });
+    // The sync is a server-side ref move on the PAT, not a commit-path write.
+    for (const c of calls) expect(new Headers(c.init.headers).get("authorization")).toBe("Bearer tok123");
+  });
+
+  it("still POSTs when the branch is already level (ahead_by 0, identical)", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("main")]: { json: { status: "identical", ahead_by: 0, behind_by: 0 } },
+      [`POST ${FORK}/merge-upstream`]: {
+        json: { message: "This branch is not behind the upstream o:main.", merge_type: "none", base_branch: "o:main" },
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    expect((await forge.syncFork(fork, "main", actor)).mergeType).toBe("none");
+    expect(posts(calls)).toHaveLength(1);
+  });
+
+  // The merge-upstream endpoint MERGES a fork branch whose own commits apply
+  // cleanly (a bot-authored, unsigned merge commit) and refuses only a
+  // conflicting one — so the proxy must refuse any ahead branch itself,
+  // before the write, or the by-construction authorship property is lost.
+  it("refuses a branch that is ahead of upstream as fork_diverged, with ZERO POSTs", async () => {
+    for (const status of ["ahead", "diverged"]) {
+      const { fn, calls } = makeFetch({
+        [`GET ${FORK}`]: forkRepo,
+        [compare("feat")]: { json: { status, ahead_by: 2, behind_by: status === "diverged" ? 5 : 0 } },
+        [`POST ${FORK}/merge-upstream`]: { json: { merge_type: "merge", base_branch: "o:feat", message: "merged" } },
+      });
+      const forge = new GithubForge({ credentials, fetch: fn });
+      await expect(forge.syncFork(fork, "feat", actor), status).rejects.toMatchObject({
+        kind: "fork_diverged", upstream: 409,
+        message: expect.stringContaining("critical-agent-zero/r@feat"),
+      });
+      expect(posts(calls), status).toHaveLength(0);
+    }
+  });
+
+  it("refuses a repo with no parent (not a fork) as a clear invalid 422, with ZERO POSTs", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${FORK}`]: { json: { default_branch: "main" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "main", actor)).rejects.toMatchObject({
+      kind: "invalid", upstream: 422, message: expect.stringMatching(/not a fork/),
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("refuses a merge_type it does not know, as an upstream error, instead of repeating it", async () => {
+    const { fn } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("main")]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${FORK}/merge-upstream`]: {
+        json: { message: "ok", merge_type: "rebase<script>", base_branch: "o:main" },
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "main", actor)).rejects.toMatchObject({
+      kind: "invalid", upstream: 502, message: expect.stringMatching(/unrecognised merge_type/),
+    });
+  });
+
+  it("maps a compare 404 (branch missing on fork or upstream) to a clear invalid 422", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("nope")]: { status: 404, json: { message: "Not Found" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "nope", actor)).rejects.toMatchObject({
+      kind: "invalid", upstream: 422, message: expect.stringMatching(/does not exist/),
+    });
+    expect(posts(calls)).toHaveLength(0);
+  });
+
+  it("encodes the branch and parent owner into one compare path unit", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [`GET ${FORK}/compare/o:feat%2Fx...feat%2Fx`]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${FORK}/merge-upstream`]: {
+        json: { message: "ok", merge_type: "fast-forward", base_branch: "o:feat/x" },
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await forge.syncFork(fork, "feat/x", actor);
+    expect(calls[1]!.url).toBe(`${FORK}/compare/o:feat%2Fx...feat%2Fx`);
+  });
+
+  // The pre-check can race a commit that lands on the fork branch between
+  // the compare and the merge; the mapping stays as the backstop.
+  it("maps a merge-upstream 409 (conflicting commits, pre-check raced) to fork_diverged", async () => {
+    const { fn } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("feat")]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${FORK}/merge-upstream`]: { status: 409, json: { message: "There are merge conflicts" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "feat", actor)).rejects.toMatchObject({
+      kind: "fork_diverged", upstream: 409,
+      message: expect.stringContaining("critical-agent-zero/r@feat"),
+    });
+  });
+
+  it("passes a merge_type 'merge' (pre-check raced a clean divergence) through so the ledger records it", async () => {
+    const { fn } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("feat")]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${FORK}/merge-upstream`]: {
+        json: { message: "Successfully fetched and merged from upstream o:feat", merge_type: "merge", base_branch: "o:feat" },
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    expect((await forge.syncFork(fork, "feat", actor)).mergeType).toBe("merge");
+  });
+
+  it("maps a merge-upstream 422 (branch missing / not a fork) to a clear invalid", async () => {
+    const { fn } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("nope")]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${FORK}/merge-upstream`]: { status: 422, json: { message: "Validation Failed" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "nope", actor)).rejects.toMatchObject({
+      kind: "invalid", upstream: 422,
+      message: expect.stringMatching(/not a fork/),
+    });
+  });
+
+  it("keeps a 422 that mapError read as non_fast_forward on that kind (not relabelled invalid)", async () => {
+    const { fn } = makeFetch({
+      [`GET ${FORK}`]: forkRepo,
+      [compare("main")]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${FORK}/merge-upstream`]: { status: 422, json: { message: "Update is not a fast forward" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "main", actor)).rejects.toMatchObject({
+      kind: "non_fast_forward", upstream: 422,
+    });
+  });
+
+  it("leaves other upstream failures on the generic mapping", async () => {
+    const { fn } = makeFetch({
+      [`GET ${FORK}`]: { status: 404, json: { message: "Not Found" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork(fork, "main", actor)).rejects.toMatchObject({ kind: "not_found" });
+  });
+
+  it("refuses a multi-segment owner/repo before any request", async () => {
+    const { fn, calls } = makeFetch({});
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.syncFork({ owner: "critical-agent-zero", name: "r/../../o/src" }, "main", actor))
+      .rejects.toMatchObject({ kind: "invalid" });
+    expect(calls).toHaveLength(0);
+  });
+});
+
 describe("GithubForge commit-path vs PAT-path token selection (issue #120)", () => {
   // A store that hands a DIFFERENT token to the commit write-path (App
   // installation token) than to every other call (PAT), so we can assert
@@ -374,10 +560,12 @@ describe("GithubForge commit-path vs PAT-path token selection (issue #120)", () 
     expect((split.resolve as ReturnType<typeof vi.fn>)).not.toHaveBeenCalled();
   });
 
-  it("keeps fork, PR-open, comment, and repo reads on the PAT", async () => {
+  it("keeps fork, sync, PR-open, comment, and repo reads on the PAT", async () => {
     const { fn, calls } = makeFetch({
-      [`GET ${B}`]: { json: { default_branch: "main" } },
+      [`GET ${B}`]: { json: { default_branch: "main", parent: { owner: { login: "up" } } } },
       [`GET ${B}/git/ref/heads/main`]: { json: { object: { sha: "abc" } } },
+      [`GET ${B}/compare/up:main...main`]: { json: { status: "behind", ahead_by: 0, behind_by: 1 } },
+      [`POST ${B}/merge-upstream`]: { json: { merge_type: "fast-forward", base_branch: "up:main", message: "ok" } },
       [`POST ${B}/forks`]: { json: { name: "r", owner: { login: "x" }, default_branch: "main" } },
       [`POST ${B}/pulls`]: { json: { number: 1, html_url: "u" } },
       [`POST ${B}/issues/7/comments`]: { json: { id: 1, html_url: "u" } },
@@ -386,6 +574,7 @@ describe("GithubForge commit-path vs PAT-path token selection (issue #120)", () 
     const forge = new GithubForge({ credentials: split, fetch: fn });
     await forge.getRepo({ owner: "o", name: "r" }, actor);
     await forge.fork({ owner: "o", name: "r" }, actor);
+    await forge.syncFork({ owner: "o", name: "r" }, "main", actor);
     await forge.openPullRequest({ owner: "o", name: "r" },
       { head: "f", base: "main", title: "t", body: "b" }, actor);
     await forge.comment({ owner: "o", name: "r" }, 7, "hi", actor);

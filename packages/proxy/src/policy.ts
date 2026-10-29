@@ -5,7 +5,7 @@ import { gitlabServiceAccountUsername } from "./gitlab-names.js";
  *  rules will pattern-match on. */
 export interface ForgeOp {
   service: string;
-  kind: "repo" | "commit" | "blob" | "pr" | "comment" | "provision" | "fork";
+  kind: "repo" | "commit" | "blob" | "pr" | "comment" | "provision" | "fork" | "sync";
   owner: string;
   repo: string;
 }
@@ -28,30 +28,35 @@ export interface ForkPolicyConfig {
 
 const deny = (expected: string, owner: string): PolicyDecision => ({
   allow: false,
-  reason: `commits must target the fork namespace "${expected}", not "${owner}"`,
+  reason: `writes must target the fork namespace "${expected}", not "${owner}"`,
 });
 
-/** Deterministic guard-rail (issue #23): a commit may only target the calling
+/** Deterministic guard-rail (issue #23): a write may only target the calling
  *  identity's fork namespace, never the source repo. GitLab forks live in the
  *  identity's own service-account namespace (agent-<id>), derivable with no
  *  config; GitHub uses one shared fork account, supplied via config. */
 export function forkNamespacePolicy(config: ForkPolicyConfig = {}): Policy {
   return (agent, op) => {
-    // Blob uploads are the first write in the streaming commit path (#118):
-    // they must be pinned to the fork namespace exactly like the commit, or a
-    // rejected target could still leave dangling objects in the source repo.
-    if (op.kind !== "commit" && op.kind !== "blob") return { allow: true };
+    // The pinned kinds are every write to a repo the agent names as its
+    // fork. Blob uploads are the first write in the streaming commit path
+    // (#118): they must be pinned exactly like the commit, or a rejected
+    // target could still leave dangling objects in the source repo. A sync
+    // moves a branch ref on the named repo from its upstream: aimed at the
+    // source it would be a ref write to a repo the agent must never touch,
+    // so it is pinned too — and fails closed on GitHub without a configured
+    // fork owner, as commits do.
+    if (op.kind !== "commit" && op.kind !== "blob" && op.kind !== "sync") return { allow: true };
     if (op.service === "gitlab") {
       const expected = gitlabServiceAccountUsername(agent.agentId);
       return op.owner === expected ? { allow: true } : deny(expected, op.owner);
     }
     if (op.service === "github") {
       // Fail closed: without a configured fork owner we cannot tell a fork
-      // target from the source, so refuse the commit rather than allow it.
+      // target from the source, so refuse the write rather than allow it.
       if (!config.githubForkOwner) {
         return {
           allow: false,
-          reason: "GitHub commit blocked: the proxy is not configured with a fork owner "
+          reason: `GitHub ${op.kind} blocked: the proxy is not configured with a fork owner `
             + "(deploy with -c githubForkOwner=<bot-login>)",
         };
       }

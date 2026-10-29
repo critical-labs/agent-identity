@@ -354,6 +354,18 @@ export function makeTools(manager: ClaimManager, env: ForgeEnv = defaultForgeEnv
       }
     },
 
+    // Sync the fork (owner = the fork namespace) from its upstream before a
+    // commit when the fork may be behind. The proxy resolves a missing branch
+    // to the fork's default branch, so the tool passes it through untouched.
+    async forgeSync(args: { service?: string; owner: string; repo: string; branch?: string }) {
+      try {
+        return await manager.client().forgeSync(args.service ?? "github",
+          { owner: args.owner, name: args.repo }, args.branch);
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
     async forgeProvision(args: { service?: string }) {
       try {
         return await manager.client().forgeProvision(args.service ?? "gitlab");

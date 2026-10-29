@@ -3,7 +3,7 @@ import {
   type AgentStatusView, type BlobResult, type CommentResult, type CommitChangesSpec,
   type CommitResult, type CommitSpec, type EmailFull, type EmailSummary, type ForgeProvisionResult,
   type ForkResult, type Keypair, type PrResult, type PrSpec,
-  type RegisterResponse, type RepoInfo, type RepoRef,
+  type RegisterResponse, type RepoInfo, type RepoRef, type SyncResult,
 } from "@agent-identity/shared";
 
 /** GET /me: identity plus operator-set capabilities and, when one has been
@@ -165,6 +165,18 @@ export class AgentIdentityClient {
   forgeFork(service: string, ref: RepoRef): Promise<ForkResult> {
     return this.request("POST", `/forge/${service}/fork`,
       JSON.stringify({ owner: ref.owner, repo: ref.name }));
+  }
+
+  /** Fast-forward a branch of the agent's FORK to its upstream, with the
+   *  proxy's own credential. `ref` names the fork; `branch` omitted means the
+   *  fork's default branch (the proxy resolves it). The proxy never creates a
+   *  commit here: a 409 `fork_diverged` means the fork branch is ahead of
+   *  upstream by any commit, conflicting or not, and was refused before the
+   *  forge was asked — start a new branch instead. mergeType in the result is
+   *  "fast-forward" (moved) or "none" (already level). */
+  forgeSync(service: string, ref: RepoRef, branch?: string): Promise<SyncResult> {
+    return this.request("POST", `/forge/${service}/sync`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, ...(branch !== undefined ? { branch } : {}) }));
   }
 
   forgeProvision(service: string): Promise<ForgeProvisionResult> {

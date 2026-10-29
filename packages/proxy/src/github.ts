@@ -1,12 +1,19 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
   ForkResult, PrResult, PrSpec, RepoInfo, RepoRef,
-  RepoVisibility,
+  RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import { canonicalCommitObject } from "./commit-object.js";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
 } from "./forge.js";
+
+// merge-upstream's verdicts, as the proxy will repeat them in attested events
+// and the public fleet projection: anything else the forge says is an error.
+const MERGE_TYPES: ReadonlySet<string> = new Set(["fast-forward", "merge", "none"]);
+function isMergeType(value: unknown): value is SyncResult["mergeType"] {
+  return typeof value === "string" && MERGE_TYPES.has(value);
+}
 
 export interface GithubForgeOptions {
   credentials: CredentialStore;
@@ -234,6 +241,103 @@ export class GithubForge implements Forge {
     const f = await this.gh<{ name: string; owner: { login: string }; default_branch: string }>(
       "POST", `${this.repoPath(ref)}/forks`, actor.name);
     return { owner: f.owner.login, repo: f.name, defaultBranch: f.default_branch };
+  }
+
+  /** GitHub's merge-upstream endpoint, on the FORK, brings `branch` level
+   *  with the upstream branch of the same name. It runs on the PAT (the fork
+   *  account's own credential), not the commit-path token: a fast-forward is
+   *  a ref move GitHub performs server-side, not a commit the proxy
+   *  constructs, so there is nothing to sign (#120) and the installation
+   *  token's narrow commit-API grant is not the right fit.
+   *
+   *  GitHub's contract is wider than a fast-forward, though: a fork branch
+   *  whose own commits merge cleanly gets a MERGE COMMIT authored by the
+   *  fork account (merge_type "merge"), and only a conflicting branch is
+   *  refused with 409. Such a commit is neither authored as the acting
+   *  identity nor signed, which breaks the proxy's by-construction
+   *  authorship property, and because the fork account is shared it could
+   *  land on a branch another identity is working on. The write would
+   *  happen before the proxy learned of it, so the only defence is to fail
+   *  closed BEFORE the call: compare the fork branch against its upstream
+   *  and refuse any branch that is ahead at all, not just a conflicting
+   *  one. The 409 mapping below stays as the backstop for a race between the
+   *  compare and the merge. repoPath() has pinned owner/repo to single
+   *  segments and the proxy policy has pinned the ref to the fork namespace
+   *  before this runs. */
+  async syncFork(ref: RepoRef, branch: string, actor: Author): Promise<SyncResult> {
+    const r = this.repoPath(ref);
+    const name = `${ref.owner}/${ref.name}@${branch}`;
+    const diverged = () => new ForgeError("fork_diverged",
+      `${name} is ahead of its upstream and cannot be fast-forwarded; the proxy never `
+      + "merges on the agent's behalf, so start a new branch from the fresh base instead", 409);
+
+    // The upstream is whatever GitHub says the fork's parent is. A repo with
+    // no parent is not a fork and has nothing to sync from; merge-upstream
+    // would answer 422 for it, so say so up front in the same terms.
+    const repo = await this.gh<{ parent?: { owner: { login: string } } }>("GET", r, actor.name);
+    if (!repo.parent) {
+      throw new ForgeError("invalid",
+        `cannot sync ${name}: ${ref.owner}/${ref.name} is not a fork`, 422);
+    }
+    // base...head: `ahead_by` is the number of commits the fork branch has
+    // that the upstream branch lacks — any at all means a sync would merge.
+    // Every piece is encoded so the branch stays one path unit (dot
+    // segments must not re-target the URL outside `r`).
+    const basehead = `${encodeURIComponent(repo.parent.owner.login)}:${encodeURIComponent(branch)}`
+      + `...${encodeURIComponent(branch)}`;
+    let cmp: { ahead_by: number };
+    try {
+      cmp = await this.gh<{ ahead_by: number }>("GET", `${r}/compare/${basehead}`, actor.name);
+    } catch (err) {
+      // compare 404s when either side of the range is missing: the branch
+      // is not on the fork or not on the upstream. Neither is a "not found"
+      // the caller can retry; it is a bad request for this sync.
+      // (A fork renamed away from its parent's name can also 404 here, since
+      // the OWNER:BRANCH form resolves the parent by owner alone.)
+      if (err instanceof ForgeError && err.kind === "not_found") {
+        throw new ForgeError("invalid",
+          `cannot sync ${name}: the branch does not exist on the fork or on its upstream `
+          + "(or the fork is renamed from its parent)", 422);
+      }
+      throw err;
+    }
+    if (cmp.ahead_by > 0) throw diverged();
+
+    try {
+      const s = await this.gh<{ merge_type: string; base_branch: string; message: string }>(
+        "POST", `${r}/merge-upstream`, actor.name, { branch });
+      // The pre-check should make "merge" impossible; it can still happen if
+      // a commit landed on the fork branch between the compare and the
+      // merge. The result is passed through unchanged so the route audits
+      // and attests the mergeType it actually got — the ledger must show
+      // that a bot-authored merge commit now exists rather than hide it.
+      // The value is narrowed first: it reaches attested events and the
+      // public fleet projection, which must never carry a string the forge
+      // invented. The ref move may already have happened by now, so this is
+      // reported as an upstream error rather than passed through.
+      if (!isMergeType(s.merge_type)) {
+        throw new ForgeError("invalid",
+          `github returned an unrecognised merge_type for ${name}`, 502);
+      }
+      return { mergeType: s.merge_type, baseBranch: s.base_branch, message: s.message };
+    } catch (err) {
+      if (!(err instanceof ForgeError)) throw err;
+      // GitHub answers 409 only when the fork branch's own commits CONFLICT
+      // with upstream (a clean divergence is merged, not refused). The
+      // compare above refuses any ahead branch first, so reaching this means
+      // the branch moved under us; the remedy is the same.
+      if (err.upstream === 409) throw diverged();
+      // 422 is GitHub's "cannot do that here": the branch does not exist on
+      // the fork, or the repo is not a fork at all. mapError's generic 422
+      // text is GitHub's "Validation Failed"; say what it means for this
+      // call. Narrowed to the generic kind so a 422 mapError already read as
+      // non_fast_forward keeps that meaning instead of being relabelled.
+      if (err.kind === "invalid" && err.upstream === 422) {
+        throw new ForgeError("invalid",
+          `cannot sync ${name}: the branch does not exist on the fork or the repo is not a fork`, 422);
+      }
+      throw err;
+    }
   }
 
   async repoVisibility(ref: RepoRef, actor: Author): Promise<RepoVisibility> {

@@ -82,9 +82,15 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     }
   };
 
+  // `okFields` lets a route add to the success audit line what `op` alone
+  // cannot name — a value resolved inside the gated call (a defaulted
+  // branch) or an outcome the operator must be able to grep for (a sync's
+  // mergeType). The attested event carries these too, but the audit log is
+  // what exists when no ledger is configured.
   const run = async <T>(
     c: Context, g: Guarded, op: ForgeOp, call: () => Promise<T>,
     attest?: (result: T) => Attestation | Promise<Attestation>,
+    okFields?: (result: T) => Record<string, unknown>,
   ): Promise<Response> => {
     const base = {
       agentId: g.agent.agentId, service: op.service, op: op.kind,
@@ -98,7 +104,9 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     const started = Date.now();
     try {
       const result = await call();
-      audit({ ...base, outcome: "ok", latencyMs: Date.now() - started });
+      // `base` is spread LAST: a route's extra fields may add to the line but
+      // never relabel who did what (agentId, service, op, owner, repo).
+      audit({ ...okFields?.(result), ...base, outcome: "ok", latencyMs: Date.now() - started });
       if (attest && deps.activity) {
         try {
           // Central character/length defense: route attestations embed
@@ -329,6 +337,50 @@ export function createProxyApp(deps: ProxyDeps): Hono {
           ])),
         },
       }));
+  });
+
+  // Sync a fork branch from its upstream. `owner`/`repo` name the FORK: the
+  // op is a ref write to that repo, so it is fork-namespace-pinned (op.kind
+  // "sync", see policy.ts) and a sync aimed at the source is refused before
+  // the adapter is reached. `branch` is optional and defaults to the fork's
+  // default branch, resolved here rather than required of the caller: the
+  // default is one more upstream read, and resolving it inside the gated
+  // call keeps the resolution behind the same policy decision, so a denied
+  // target gets no read either. Doing it in the proxy — not the MCP tool —
+  // means every client (MCP, raw SDK) gets the same default without a
+  // second signed round trip. (getRepo also reads the head sha, which a
+  // default needs not; one spare read per defaulted sync is cheaper than a
+  // second repo-read method on every adapter.) The success audit line names
+  // the branch actually moved and the mergeType the forge reported, because
+  // `op` alone cannot carry a defaulted branch, and a "merge" — the trace of
+  // a bot-authored merge commit the adapter's pre-check failed to prevent —
+  // must be greppable in the log, not only in the ledger.
+  app.post("/forge/:service/sync", async (c) => {
+    const g = guard(c);
+    if (g instanceof Response) return g;
+    const b = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    if (!b || !isName(b.owner) || !isName(b.repo)
+      || (b.branch !== undefined && !isBranch(b.branch))) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const op: ForgeOp = { service: g.service, kind: "sync", owner: b.owner, repo: b.repo };
+    const ref: RepoRef = { owner: b.owner, name: b.repo };
+    const fork = `${b.owner}/${b.repo}`;
+    let branch = b.branch as string | undefined;
+    return run(c, g, op, async () => {
+      branch ??= (await g.forge.getRepo(ref, g.actor)).defaultBranch;
+      return g.forge.syncFork(ref, branch, g.actor);
+    }, async (r) => ({
+      type: "forge_sync",
+      summary: `synced ${fork}@${branch} from upstream (${r.mergeType})`,
+      detail: {
+        service: g.service, fork, branch: branch as string, mergeType: r.mergeType,
+        // A sync names ONE repo, the fork; the upstream is not a party to
+        // the event (the forge chose it), so only the fork's visibility
+        // decides whether the event may be public.
+        ...(await visibilityStamp(g, [ref])),
+      },
+    }), (r) => ({ branch, mergeType: r.mergeType }));
   });
 
   app.post("/forge/:service/provision", async (c) => {

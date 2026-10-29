@@ -1,7 +1,7 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
   ForkResult, PrResult, PrSpec, RepoInfo, RepoRef,
-  RepoVisibility,
+  RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
@@ -222,6 +222,20 @@ export class GitlabForge implements Forge {
       const p = await this.gl<Project>("GET", `/projects/${this.project(existing)}`, actor.name);
       return { owner: p.namespace.full_path, repo: p.path, defaultBranch: p.default_branch };
     }
+  }
+
+  /** GitLab has no merge-upstream endpoint, and the need is weaker there:
+   *  every identity forks into its OWN service-account namespace, so a stale
+   *  fork is simply re-created fresh (the fork is per identity, not a shared
+   *  account's long-lived copy as on GitHub). Refused explicitly, in
+   *  putBlob's unsupported style, rather than treated as a silent no-op, so
+   *  a GitHub-style sync routed here fails loudly instead of pretending the
+   *  fork is level. */
+  async syncFork(_ref: RepoRef, _branch: string, _actor: Author): Promise<SyncResult> {
+    throw new ForgeError(
+      "invalid",
+      "gitlab does not support syncing a fork from upstream; re-fork to get a fresh base",
+      400);
   }
 
   async repoVisibility(ref: RepoRef, actor: Author): Promise<RepoVisibility> {

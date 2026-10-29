@@ -27,7 +27,7 @@ The setup wizard prompts for your backend URL and fleet key, writes `~/.config/a
 
 ## What you get
 
-- **`agent-identity-mcp`** — MCP server with tools: `ensure_identity`, `identity_status`, `list_emails`, `get_email`, `wait_for_email`, plus the forge tools (`forge_repo`, `forge_fork`, `forge_commit`, `forge_open_pr`, `forge_comment`, `forge_provision`) on capable identities. Prefer `npx -y @critical-labs/agent-identity-mcp` in MCP configs — the single-bin wrapper can never resolve to a lookalike package.
+- **`agent-identity-mcp`** — MCP server with tools: `ensure_identity`, `identity_status`, `list_emails`, `get_email`, `wait_for_email`, plus the forge tools (`forge_repo`, `forge_fork`, `forge_sync`, `forge_commit`, `forge_deliver`, `forge_open_pr`, `forge_comment`, `forge_provision`) on capable identities. Prefer `npx -y @critical-labs/agent-identity-mcp` in MCP configs — the single-bin wrapper can never resolve to a lookalike package.
 - **`agent-identity`** — CLI with commands: `setup`, `pool provision`, `pool status`, `github link`, `github onboard`
 - **Library** — import directly from the package:
 

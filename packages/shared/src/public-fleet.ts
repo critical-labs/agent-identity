@@ -100,6 +100,9 @@ const FORGE_RULES: Record<string, { repoFields: string[]; detailFields: string[]
   forge_pr: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_comment: { repoFields: ["repo"], detailFields: ["service", "repo", "issue"] },
   forge_fork: { repoFields: ["source", "fork"], detailFields: ["service", "source", "fork"] },
+  // A sync names only the fork: the upstream it synced from is the forge's
+  // choice, not a field the agent supplied, and the event carries no ref.
+  forge_sync: { repoFields: ["fork"], detailFields: ["service", "fork", "branch", "mergeType"] },
 };
 
 const FORGE_SENDER_DOMAINS = ["github.com", "gitlab.com"];
