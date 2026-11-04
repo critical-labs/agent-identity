@@ -110,6 +110,14 @@ export interface CommitResult {
   url: string;
 }
 
+/** An edit to a PR/MR the acting account opened. At least one field is
+ *  required; a field left out is left alone on the forge. The proxy carries
+ *  the attribution footers forward itself (the agent never writes them). */
+export interface PrUpdateSpec {
+  title?: string;
+  body?: string;
+}
+
 export interface PrResult {
   number: number;
   url: string;

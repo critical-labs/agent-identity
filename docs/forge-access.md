@@ -20,6 +20,10 @@ Ed25519 identity, and it holds the forge credentials server-side and executes
   forged.
 - **`forge_open_pr` / `forge_comment`** — open a PR/MR or comment, with a
   footer attributing the acting identity.
+- **`forge_update_pr`** — edit the title and/or body of a PR/MR the acting
+  account opened (any other author is refused before a write). The proxy
+  keeps the footers the body already carried and appends one naming the
+  editing identity, so a rewritten description never loses its provenance.
 - **`forge_provision`** — provision this identity on a forge that supports it
   (GitLab).
 

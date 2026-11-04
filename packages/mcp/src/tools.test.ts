@@ -299,6 +299,19 @@ describe("forge tools", () => {
     });
   });
 
+  it("forge_update_pr delegates with the number and only the fields given", async () => {
+    const forgeUpdatePr = vi.fn(async () => ({ number: 7, url: "u" }));
+    const tools = makeTools(managerWith({ forgeUpdatePr }));
+    expect(await tools.forgeUpdatePr({ owner: "o", repo: "r", number: 7, title: "t" }))
+      .toEqual({ number: 7, url: "u" });
+    expect(forgeUpdatePr).toHaveBeenCalledWith("github", { owner: "o", name: "r" }, 7, { title: "t" });
+    const failing = makeTools(managerWith({
+      forgeUpdatePr: vi.fn(async () => { throw new Error("forbidden"); }),
+    }));
+    expect(await failing.forgeUpdatePr({ owner: "o", repo: "r", number: 7, body: "b" }))
+      .toEqual({ error: "forbidden" });
+  });
+
   it("forge_open_pr and forge_comment delegate with explicit service", async () => {
     const forgeOpenPr = vi.fn(async () => ({ number: 2, url: "u" }));
     const forgeComment = vi.fn(async () => ({ id: 4, url: "u" }));

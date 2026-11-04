@@ -222,6 +222,39 @@ describe("GitlabForge.openPullRequest and comment", () => {
     });
   });
 
+  it("updates an MR the identity's own service account opened, carrying footers forward", async () => {
+    const ATTR = "_description updated by agent 482913 via agent-identity proxy_";
+    const mr = {
+      iid: 4, web_url: "https://gitlab.com/o/r/-/merge_requests/4", title: "old",
+      description: "old\n\n_opened by agent 482913 via agent-identity proxy_",
+      author: { username: "agent-482913" },
+    };
+    const { fn, calls } = makeFetch({
+      [`GET ${P}/merge_requests/4`]: { json: mr },
+      [`PUT ${P}/merge_requests/4`]: { json: mr },
+    });
+    const forge = new GitlabForge({ credentials, fetch: fn });
+    const r = await forge.updatePullRequest({ owner: "o", name: "r" }, 4,
+      { body: "new" }, ATTR, actor);
+    expect(r).toEqual({ number: 4, url: "https://gitlab.com/o/r/-/merge_requests/4" });
+    const put = calls.find((c) => c.init.method === "PUT")!;
+    expect(JSON.parse(put.init.body as string)).toEqual({
+      description: `new\n\n_opened by agent 482913 via agent-identity proxy_\n${ATTR}`,
+    });
+  });
+
+  it("refuses an MR another account opened, before any write", async () => {
+    const mr = { iid: 4, web_url: "u", title: "t", description: "", author: { username: "agent-999" } };
+    const { fn, calls } = makeFetch({
+      [`GET ${P}/merge_requests/4`]: { json: mr },
+      [`PUT ${P}/merge_requests/4`]: { json: mr },
+    });
+    const forge = new GitlabForge({ credentials, fetch: fn });
+    await expect(forge.updatePullRequest({ owner: "o", name: "r" }, 4, { title: "x" }, "_a by agent 1 via agent-identity proxy_", actor))
+      .rejects.toMatchObject({ kind: "forbidden" });
+    expect(calls.some((c) => c.init.method === "PUT")).toBe(false);
+  });
+
   it("comments as an issue note with a constructed url", async () => {
     const { fn } = makeFetch({
       [`POST ${P}/issues/12/notes`]: { json: { id: 55 } },

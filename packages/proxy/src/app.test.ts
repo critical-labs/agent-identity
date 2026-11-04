@@ -2,7 +2,7 @@ import type { AgentRecord, NoncesRepo } from "@agent-identity/api";
 import {
   canonicalString, generateKeypair, sign,
   type ActivityEvent, type BlobSpec, type CommitChangesSpec, type CommitSpec,
-  type PrSpec, type RepoRef, type RepoVisibility, type SyncResult,
+  type PrSpec, type PrUpdateSpec, type RepoRef, type RepoVisibility, type SyncResult,
 } from "@agent-identity/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createProxyApp, type ProxyDeps } from "./app.js";
@@ -61,6 +61,11 @@ export class FakeForge implements Forge {
     this.calls.push(["openPullRequest", ref, spec, actor]);
     if (this.failWith) throw this.failWith;
     return { number: 7, url: "https://forge/pr/7" };
+  }
+  async updatePullRequest(ref: RepoRef, number: number, spec: PrUpdateSpec, attribution: string, actor: Author) {
+    this.calls.push(["updatePullRequest", ref, number, spec, attribution, actor]);
+    if (this.failWith) throw this.failWith;
+    return { number, url: `https://forge/pr/${number}` };
   }
   async comment(ref: RepoRef, issue: number, body: string, actor: Author) {
     this.calls.push(["comment", ref, issue, body, actor]);
@@ -397,6 +402,49 @@ describe("POST /forge/:service/pr and /comment", () => {
     ]);
   });
 
+  it("updates a PR, passing the attribution line for the proxy to append", async () => {
+    const path = "/forge/github/pr-update";
+    const body = JSON.stringify({ owner: "o", repo: "r", number: 7, title: "t2", body: "rewritten" });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ number: 7, url: "https://forge/pr/7" });
+    expect(forge.calls[0]).toEqual([
+      "updatePullRequest", { owner: "o", name: "r" }, 7, { title: "t2", body: "rewritten" },
+      "_description updated by agent 482913 via agent-identity proxy_",
+      { name: "482913", email: "482913@agents.example" },
+    ]);
+  });
+
+  it("400s a PR update with neither title nor body, or a bad number", async () => {
+    const path = "/forge/github/pr-update";
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    for (const b of [
+      { owner: "o", repo: "r", number: 7 },
+      { owner: "o", repo: "r", number: "7", body: "x" },
+      { owner: "o", repo: "r", number: 0, body: "x" },
+      { owner: "o", repo: "r", number: 7, title: "" },
+    ]) {
+      const body = JSON.stringify(b);
+      const res = await app.request(path, { ...signed("POST", path, body), body });
+      expect(res.status, JSON.stringify(b)).toBe(400);
+    }
+    expect(forge.calls).toEqual([]);
+  });
+
+  it("relays the forge's author refusal as 403 forbidden", async () => {
+    const path = "/forge/github/pr-update";
+    const body = JSON.stringify({ owner: "o", repo: "r", number: 7, body: "x" });
+    const { deps, forge } = makeDeps();
+    forge.failWith = new ForgeError("forbidden", "PR #7 was opened by someone-else", 403);
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden", detail: "PR #7 was opened by someone-else" });
+  });
+
   it("400s a comment with a non-numeric issue", async () => {
     const path = "/forge/github/comment";
     const body = JSON.stringify({ owner: "o", repo: "r", issue: "twelve", body: "note" });
@@ -659,7 +707,16 @@ describe("attested activity ledger", () => {
     const fBody = JSON.stringify({ owner: "o", repo: "r" });
     await app.request(fPath, { ...signed("POST", fPath, fBody), body: fBody });
 
-    expect(ledger.events.map((e) => e.type)).toEqual(["forge_pr", "forge_comment", "forge_fork"]);
+    const uPath = "/forge/github/pr-update";
+    const uBody = JSON.stringify({ owner: "o", repo: "r", number: 7, body: "b2" });
+    await app.request(uPath, { ...signed("POST", uPath, uBody), body: uBody });
+
+    expect(ledger.events.map((e) => e.type))
+      .toEqual(["forge_pr", "forge_comment", "forge_fork", "forge_pr_update"]);
+    expect(ledger.events[3].detail).toEqual(expect.objectContaining({
+      repo: "o/r", number: 7, fields: "body",
+    }));
+    expect(ledger.events[3].ref).toBe("https://forge/pr/7");
     expect(ledger.events[0].detail).toEqual(expect.objectContaining({ repo: "o/r", number: 7 }));
     expect(ledger.events[0].ref).toBe("https://forge/pr/7");
     expect(ledger.events[1].detail).toEqual(expect.objectContaining({ repo: "o/r", issue: 12 }));

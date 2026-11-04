@@ -334,6 +334,21 @@ export function makeTools(manager: ClaimManager, env: ForgeEnv = defaultForgeEnv
       }
     },
 
+    async forgeUpdatePr(args: {
+      service?: string; owner: string; repo: string; number: number;
+      title?: string; body?: string;
+    }) {
+      try {
+        return await manager.client().forgeUpdatePr(args.service ?? "github",
+          { owner: args.owner, name: args.repo }, args.number, {
+            ...(args.title !== undefined ? { title: args.title } : {}),
+            ...(args.body !== undefined ? { body: args.body } : {}),
+          });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
     async forgeComment(args: {
       service?: string; owner: string; repo: string; issue: number; body: string;
     }) {

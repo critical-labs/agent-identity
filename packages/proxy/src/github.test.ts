@@ -327,6 +327,77 @@ describe("GithubForge.openPullRequest and comment", () => {
   });
 });
 
+describe("GithubForge.updatePullRequest", () => {
+  const ATTR = "_description updated by agent 482913 via agent-identity proxy_";
+  const prJson = (over: Record<string, unknown> = {}) => ({
+    number: 5, html_url: "https://github.com/o/r/pull/5", title: "old title",
+    body: "old body\n\n_opened by agent 1 via agent-identity proxy_",
+    user: { login: "Critical-Agent-Zero" }, ...over,
+  });
+
+  it("edits title and body of a PR the credential account opened, carrying footers forward", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${B}/pulls/5`]: { json: prJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${B}/pulls/5`]: { json: prJson({ title: "new title" }) },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.updatePullRequest({ owner: "o", name: "r" }, 5,
+      { title: "new title", body: "new body" }, ATTR, actor);
+    expect(r).toEqual({ number: 5, url: "https://github.com/o/r/pull/5" });
+    const patch = calls.find((c) => c.init.method === "PATCH")!;
+    expect(JSON.parse(patch.init.body as string)).toEqual({
+      title: "new title",
+      body: `new body\n\n_opened by agent 1 via agent-identity proxy_\n${ATTR}`,
+    });
+  });
+
+  it("a title-only edit never touches the body", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${B}/pulls/5`]: { json: prJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${B}/pulls/5`]: { json: prJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await forge.updatePullRequest({ owner: "o", name: "r" }, 5, { title: "t2" }, ATTR, actor);
+    const patch = calls.find((c) => c.init.method === "PATCH")!;
+    expect(JSON.parse(patch.init.body as string)).toEqual({ title: "t2" });
+  });
+
+  it("refuses a PR another account opened, before any write", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${B}/pulls/5`]: { json: prJson({ user: { login: "someone-else" } }) },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${B}/pulls/5`]: { json: prJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.updatePullRequest({ owner: "o", name: "r" }, 5, { body: "x" }, ATTR, actor))
+      .rejects.toMatchObject({ kind: "forbidden" });
+    expect(calls.some((c) => c.init.method === "PATCH")).toBe(false);
+  });
+
+  it("learns the credential's login once per token", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${B}/pulls/5`]: { json: prJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${B}/pulls/5`]: { json: prJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await forge.updatePullRequest({ owner: "o", name: "r" }, 5, { title: "a" }, ATTR, actor);
+    await forge.updatePullRequest({ owner: "o", name: "r" }, 5, { title: "b" }, ATTR, actor);
+    expect(calls.filter((c) => c.url === "https://api.github.com/user")).toHaveLength(1);
+  });
+
+  it("maps a missing PR to not_found", async () => {
+    const { fn } = makeFetch({
+      [`GET ${B}/pulls/5`]: { status: 404, json: { message: "Not Found" } },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.updatePullRequest({ owner: "o", name: "r" }, 5, { title: "a" }, ATTR, actor))
+      .rejects.toMatchObject({ kind: "not_found" });
+  });
+});
+
 describe("GithubForge.fork", () => {
   it("forks under the credential account and returns the fork coordinates", async () => {
     const { fn, calls } = makeFetch({

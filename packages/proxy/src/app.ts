@@ -291,6 +291,47 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     }));
   });
 
+  // Edit the title and/or body of a PR the acting account opened. Not
+  // fork-namespace-pinned (it targets the source repo, like /pr), but
+  // author-gated inside the adapter: the forge reads the PR first and a PR
+  // another account opened is refused before any write. The attribution
+  // line is appended by the adapter AFTER the footers the old body already
+  // carried (pr-footers.ts), so a rewrite never erases who opened the PR.
+  app.post("/forge/:service/pr-update", async (c) => {
+    const g = guard(c);
+    if (g instanceof Response) return g;
+    const b = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    const hasTitle = b?.title !== undefined;
+    const hasBody = b?.body !== undefined;
+    if (!b || !isStr(b.owner) || !isStr(b.repo)
+      || !Number.isInteger(b.number) || (b.number as number) <= 0
+      || (!hasTitle && !hasBody)
+      || (hasTitle && !isStr(b.title))
+      || (hasBody && typeof b.body !== "string")) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const op: ForgeOp = { service: g.service, kind: "pr_update", owner: b.owner, repo: b.repo };
+    const attribution = `_description updated by agent ${g.agent.agentId} via agent-identity proxy_`;
+    const repo = `${b.owner}/${b.repo}`;
+    const number = b.number as number;
+    const spec = {
+      ...(hasTitle ? { title: b.title as string } : {}),
+      ...(hasBody ? { body: b.body as string } : {}),
+    };
+    const fields = [...(hasTitle ? ["title"] : []), ...(hasBody ? ["body"] : [])].join(",");
+    return run(c, g, op, () => g.forge.updatePullRequest(
+      { owner: b.owner as string, name: b.repo as string }, number, spec, attribution, g.actor,
+    ), async (r) => ({
+      type: "forge_pr_update",
+      summary: `updated PR #${r.number} on ${repo} (${fields})`,
+      detail: {
+        service: g.service, repo, number: r.number, fields,
+        ...(await visibilityStamp(g, [{ owner: b.owner as string, name: b.repo as string }])),
+      },
+      ref: r.url,
+    }), () => ({ number, fields }));
+  });
+
   app.post("/forge/:service/comment", async (c) => {
     const g = guard(c);
     if (g instanceof Response) return g;

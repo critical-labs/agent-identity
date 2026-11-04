@@ -7,7 +7,7 @@ import {
   generateKeypair, type ActivityEvent, type AgentIdentity, type AgentStatusState,
   type BlobResult, type CommentResult, type CommitChangesSpec, type CommitResult,
   type CommitSpec, type EmailFull, type EmailSummary, type ForgeProvisionResult,
-  type ForkResult, type Keypair, type PrResult, type PrSpec,
+  type ForkResult, type Keypair, type PrResult, type PrSpec, type PrUpdateSpec,
   type RegisterResponse, type RepoInfo, type RepoRef, type SyncResult,
 } from "@agent-identity/shared";
 
@@ -26,6 +26,7 @@ export interface AgentClientLike {
   forgePutBlob(service: string, ref: RepoRef, contentBase64: string): Promise<BlobResult>;
   forgeCommitChanges(service: string, ref: RepoRef, spec: CommitChangesSpec): Promise<CommitResult>;
   forgeOpenPr(service: string, ref: RepoRef, spec: PrSpec): Promise<PrResult>;
+  forgeUpdatePr(service: string, ref: RepoRef, number: number, spec: PrUpdateSpec): Promise<PrResult>;
   forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult>;
   forgeFork(service: string, ref: RepoRef): Promise<ForkResult>;
   forgeSync(service: string, ref: RepoRef, branch?: string): Promise<SyncResult>;

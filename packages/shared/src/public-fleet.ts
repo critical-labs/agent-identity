@@ -98,6 +98,8 @@ function publicRef(ref: string | undefined, repo: string): string | undefined {
 const FORGE_RULES: Record<string, { repoFields: string[]; detailFields: string[] }> = {
   forge_commit: { repoFields: ["repo"], detailFields: ["service", "repo", "branch", "sha"] },
   forge_pr: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
+  // An update names the PR it edited; which fields changed stays private.
+  forge_pr_update: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_comment: { repoFields: ["repo"], detailFields: ["service", "repo", "issue"] },
   forge_fork: { repoFields: ["source", "fork"], detailFields: ["service", "source", "fork"] },
   // A sync names only the fork: the upstream it synced from is the forge's

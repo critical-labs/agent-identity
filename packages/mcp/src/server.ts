@@ -183,6 +183,22 @@ server.registerTool(
 );
 
 server.registerTool(
+  "forge_update_pr",
+  {
+    description: "Edit the title and/or body of a pull/merge request that this identity's account opened (on GitHub, any PR the shared bot account opened). At least one of title/body is required; a field left out is unchanged. Send the body without attribution footers: the proxy keeps the footers the PR already carries and appends one naming this identity as the editor. A PR opened by any other account is refused (forbidden). service defaults to github.",
+    inputSchema: {
+      service: z.string().optional(),
+      owner: z.string(),
+      repo: z.string(),
+      number: z.number().int().positive(),
+      title: z.string().min(1).optional(),
+      body: z.string().optional(),
+    },
+  },
+  async (args) => json(await tools.forgeUpdatePr(args)),
+);
+
+server.registerTool(
   "forge_comment",
   {
     description: "Comment on an issue via the forge proxy. An attribution footer naming this identity is appended.",

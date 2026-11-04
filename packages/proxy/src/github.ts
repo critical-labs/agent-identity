@@ -1,9 +1,10 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
-  ForkResult, PrResult, PrSpec, RepoInfo, RepoRef,
+  ForkResult, PrResult, PrSpec, PrUpdateSpec, RepoInfo, RepoRef,
   RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import { canonicalCommitObject } from "./commit-object.js";
+import { withProxyFooters } from "./pr-footers.js";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
 } from "./forge.js";
@@ -28,6 +29,8 @@ export class GithubForge implements Forge {
   private readonly fetchFn: typeof globalThis.fetch;
   private readonly base: string;
   private readonly now: () => number;
+  /** The login behind each credential token, learned once from /user. */
+  private readonly logins = new Map<string, string>();
 
   constructor(private readonly opts: GithubForgeOptions) {
     this.fetchFn = opts.fetch ?? globalThis.fetch;
@@ -229,6 +232,40 @@ export class GithubForge implements Forge {
         title: spec.title, head: spec.head, base: spec.base, body: spec.body,
       });
     return { number: pr.number, url: pr.html_url };
+  }
+
+  /** The account the PAT acts as — the shared bot account on GitHub. Read
+   *  from /user once per distinct token so an author check costs one call. */
+  private async credentialLogin(agentId: string): Promise<string> {
+    const token = await this.opts.credentials.resolve("github", agentId);
+    const known = this.logins.get(token);
+    if (known) return known;
+    const me = await this.gh<{ login: string }>("GET", "/user", agentId);
+    this.logins.set(token, me.login);
+    return me.login;
+  }
+
+  async updatePullRequest(
+    ref: RepoRef, number: number, spec: PrUpdateSpec, attribution: string, actor: Author,
+  ): Promise<PrResult> {
+    const path = `${this.repoPath(ref)}/pulls/${number}`;
+    // Read first: the author check and the footers both come from the
+    // current PR, and a refused edit must write NOTHING.
+    const pr = await this.gh<{ body: string | null; user: { login: string } }>(
+      "GET", path, actor.name);
+    const me = await this.credentialLogin(actor.name);
+    // GitHub logins are case-insensitive; compare accordingly.
+    if (pr.user.login.toLowerCase() !== me.toLowerCase()) {
+      throw new ForgeError("forbidden",
+        `PR #${number} on ${ref.owner}/${ref.name} was opened by ${pr.user.login}, `
+        + `not by this identity's account (${me}); only its own PRs can be edited`, 403);
+    }
+    const patch: { title?: string; body?: string } = {};
+    if (spec.title !== undefined) patch.title = spec.title;
+    if (spec.body !== undefined) patch.body = withProxyFooters(pr.body ?? "", spec.body, attribution);
+    const updated = await this.gh<{ number: number; html_url: string }>(
+      "PATCH", path, actor.name, patch);
+    return { number: updated.number, url: updated.html_url };
   }
 
   async comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult> {

@@ -1,6 +1,6 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
-  ForgeProvisionResult, ForkResult, PrResult, PrSpec,
+  ForgeProvisionResult, ForkResult, PrResult, PrSpec, PrUpdateSpec,
   RepoInfo, RepoRef, RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 
@@ -61,6 +61,18 @@ export interface Forge {
    *  the fork-namespace pin are unchanged. */
   commitChanges(ref: RepoRef, spec: CommitChangesSpec, actor: Author): Promise<CommitResult>;
   openPullRequest(ref: RepoRef, spec: PrSpec, actor: Author): Promise<PrResult>;
+  /** Edit the title and/or body of PR/MR `number` on `ref`. Author-only by
+   *  construction: the adapter reads the PR first and refuses, with
+   *  ForgeError("forbidden"), one that the acting credential's own account
+   *  did not open — on GitHub that is the shared bot account, so any
+   *  identity may edit any bot-opened PR (the ledger records which one did);
+   *  on GitLab it is the identity's own service account. A body edit keeps
+   *  every attribution footer the old body carried and appends
+   *  `attribution` (see pr-footers.ts), so the agent can never remove or
+   *  forge provenance. A title-only edit leaves the body untouched. */
+  updatePullRequest(
+    ref: RepoRef, number: number, spec: PrUpdateSpec, attribution: string, actor: Author,
+  ): Promise<PrResult>;
   comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult>;
   fork(ref: RepoRef, actor: Author): Promise<ForkResult>;
   /** Bring one branch of the identity's FORK level with the same branch on
