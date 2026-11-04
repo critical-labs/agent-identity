@@ -202,6 +202,17 @@ describe("forge methods", () => {
     expect(url).toBe("https://api.example/forge/github/repo/o/r");
   });
 
+  it("forgeUpdatePr posts number and the given fields only", async () => {
+    const fetchMock = makeFetch({ number: 7, url: "u" });
+    const client = new AgentIdentityClient({
+      apiUrl: "https://api.example", keypair: kp, fetch: fetchMock as never,
+    });
+    await client.forgeUpdatePr("github", { owner: "o", name: "r" }, 7, { body: "d" });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://api.example/forge/github/pr-update");
+    expect(JSON.parse(init.body as string)).toEqual({ owner: "o", repo: "r", number: 7, body: "d" });
+  });
+
   it("forgeOpenPr and forgeComment post their bodies", async () => {
     const fetchMock = makeFetch({ number: 1, url: "u" });
     const client = new AgentIdentityClient({

@@ -2,7 +2,7 @@ import {
   canonicalString, sign, type ActivityEvent, type AgentIdentity, type AgentStatusState,
   type AgentStatusView, type BlobResult, type CommentResult, type CommitChangesSpec,
   type CommitResult, type CommitSpec, type EmailFull, type EmailSummary, type ForgeProvisionResult,
-  type ForkResult, type Keypair, type PrResult, type PrSpec,
+  type ForkResult, type Keypair, type PrResult, type PrSpec, type PrUpdateSpec,
   type RegisterResponse, type RepoInfo, type RepoRef, type SyncResult,
 } from "@agent-identity/shared";
 
@@ -155,6 +155,14 @@ export class AgentIdentityClient {
   forgeOpenPr(service: string, ref: RepoRef, spec: PrSpec): Promise<PrResult> {
     return this.request("POST", `/forge/${service}/pr`,
       JSON.stringify({ owner: ref.owner, repo: ref.name, ...spec }));
+  }
+
+  /** Edit the title and/or body of a PR/MR this identity's account opened.
+   *  The proxy refuses any other PR and carries the attribution footers
+   *  forward itself; send the body WITHOUT footers. */
+  forgeUpdatePr(service: string, ref: RepoRef, number: number, spec: PrUpdateSpec): Promise<PrResult> {
+    return this.request("POST", `/forge/${service}/pr-update`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, number, ...spec }));
   }
 
   forgeComment(service: string, ref: RepoRef, issue: number, body: string): Promise<CommentResult> {

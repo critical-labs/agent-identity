@@ -1,12 +1,13 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
-  ForkResult, PrResult, PrSpec, RepoInfo, RepoRef,
+  ForkResult, PrResult, PrSpec, PrUpdateSpec, RepoInfo, RepoRef,
   RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
 } from "./forge.js";
 import { gitlabServiceAccountUsername } from "./gitlab-names.js";
+import { withProxyFooters } from "./pr-footers.js";
 
 export interface GitlabForgeOptions {
   credentials: CredentialStore;
@@ -198,6 +199,32 @@ export class GitlabForge implements Forge {
         title: spec.title, description: spec.body, target_project_id: upstream.id,
       });
     return { number: mr.iid, url: mr.web_url };
+  }
+
+  /** An MR is edited through the project it targets (`ref`); for a
+   *  cross-project MR from a fork the iid still lives on the source project
+   *  the agent names, which is where openPullRequest returned it from. The
+   *  author must be this identity's own service account: GitLab forks are
+   *  per identity, so no other agent's MR is ever editable here. */
+  async updatePullRequest(
+    ref: RepoRef, number: number, spec: PrUpdateSpec, attribution: string, actor: Author,
+  ): Promise<PrResult> {
+    const path = `/projects/${this.project(ref)}/merge_requests/${number}`;
+    const mr = await this.gl<{ description: string | null; author: { username: string } }>(
+      "GET", path, actor.name);
+    const me = gitlabServiceAccountUsername(actor.name);
+    if (mr.author.username !== me) {
+      throw new ForgeError("forbidden",
+        `MR !${number} on ${ref.owner}/${ref.name} was opened by ${mr.author.username}, `
+        + `not by this identity (${me}); only its own MRs can be edited`, 403);
+    }
+    const put: { title?: string; description?: string } = {};
+    if (spec.title !== undefined) put.title = spec.title;
+    if (spec.body !== undefined) {
+      put.description = withProxyFooters(mr.description ?? "", spec.body, attribution);
+    }
+    const updated = await this.gl<{ iid: number; web_url: string }>("PUT", path, actor.name, put);
+    return { number: updated.iid, url: updated.web_url };
   }
 
   async comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult> {

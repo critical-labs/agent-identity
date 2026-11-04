@@ -5,7 +5,7 @@ import { gitlabServiceAccountUsername } from "./gitlab-names.js";
  *  rules will pattern-match on. */
 export interface ForgeOp {
   service: string;
-  kind: "repo" | "commit" | "blob" | "pr" | "comment" | "provision" | "fork" | "sync";
+  kind: "repo" | "commit" | "blob" | "pr" | "pr_update" | "comment" | "provision" | "fork" | "sync";
   owner: string;
   repo: string;
 }

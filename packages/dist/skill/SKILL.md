@@ -104,7 +104,9 @@ namespace — returns the fork's owner/repo), `forge_sync` (fast-forward a
 branch of your fork from its upstream so a PR gets a fresh base; GitHub),
 `forge_commit` (create a commit; authorship is set server-side to YOUR
 identity), `forge_open_pr`, `forge_comment` (both append an attribution
-footer), and `forge_provision` (gitlab). **Contribution model: fork, then
+footer), `forge_update_pr` (edit the title or body of a PR your account
+opened; the proxy carries the attribution footers forward and refuses any
+other author's PR), and `forge_provision` (gitlab). **Contribution model: fork, then
 PR.** You do not have write access to source repos — call `forge_fork` on
 the source, commit to the returned fork (`forge_commit` with `owner` = the
 fork owner), then `forge_open_pr` on the source with `head` =
