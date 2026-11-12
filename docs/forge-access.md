@@ -67,10 +67,16 @@ assignees, or a milestone needs triage access there: without it GitHub
 *accepts* the issue but silently drops them, which the proxy reports as a
 `warning` in the result.
 
-"No write to source" (for repo content) is enforced two ways: the credential is scoped to the
-bot's fork namespace (it *cannot* write upstream), and a deterministic proxy
-policy refuses any commit whose target isn't the identity's fork namespace (it
-*won't*). That policy is the first rule on the guard-rail seam that a fuller
+"No write to source" (for repo content) is enforced by a deterministic proxy
+policy that refuses any commit, blob, or sync whose target isn't the
+identity's fork namespace (it *won't*). Ideally the credential is also
+scoped so it *cannot* write upstream content — but once the GitHub
+credential is granted Issues: write on source repos (above), and especially
+with a classic `public_repo`/`repo` PAT, that credential layer no longer
+covers source repos, and the proxy policy is the only thing keeping commits
+off them. Prefer the narrowest grant that still allows issues (a
+fine-grained token, or an App with Issues: write but not Contents: write on
+the source repos) so both layers keep holding. That policy is the first rule on the guard-rail seam that a fuller
 policy engine (scope allow-lists, rate limits, destructive-action gates) will
 grow into.
 

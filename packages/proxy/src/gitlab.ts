@@ -7,7 +7,7 @@ import {
   ForgeError, type Author, type CredentialStore, type Forge,
 } from "./forge.js";
 import { gitlabServiceAccountUsername } from "./gitlab-names.js";
-import { matchLabels } from "./issue-labels.js";
+import { appliedWarning, matchLabels } from "./issue-labels.js";
 import { withProxyFooters } from "./pr-footers.js";
 
 /** Upper bound on label-list pages read per issue write (100 per page). */
@@ -19,14 +19,31 @@ interface GitlabIssue {
   web_url: string;
   state: string;          // "opened" | "closed"
   labels?: string[];
+  assignees?: { username: string }[];
+  milestone?: { iid: number } | null;
 }
 
-function gitlabIssueResult(issue: GitlabIssue): IssueResult {
+/** The IssueResult for an issue payload. GitLab, like GitHub, accepts
+ *  labels/assignees/milestone from a role that may not set them and silently
+ *  ignores them, so the same after-the-write warning applies. `requested`
+ *  carries assignee USERNAMES (the caller's terms), compared against the
+ *  usernames GitLab reports back. */
+function gitlabIssueResult(
+  issue: GitlabIssue, requested: { labels?: string[]; assignees?: string[]; milestone?: number },
+): IssueResult {
+  const labels = (issue.labels ?? []).filter((l): l is string => typeof l === "string");
+  const warning = appliedWarning("gitlab", {
+    requestedLabels: requested.labels, resultLabels: labels,
+    requestedAssignees: requested.assignees,
+    resultAssignees: (issue.assignees ?? []).map((a) => a.username),
+    requestedMilestone: requested.milestone, resultMilestone: issue.milestone?.iid ?? null,
+  }, "this identity's role on the project is likely below Planner/Reporter (GitLab ignores these silently)");
   return {
     number: issue.iid,
     url: issue.web_url,
     state: issue.state === "closed" ? "closed" : "open",
-    labels: (issue.labels ?? []).filter((l): l is string => typeof l === "string"),
+    labels,
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -301,7 +318,8 @@ export class GitlabForge implements Forge {
     if (labels !== undefined) post.labels = labels.join(",");
     if (spec.assignees !== undefined) post.assignee_ids = await this.assigneeIds(spec.assignees, actor.name);
     if (spec.milestone !== undefined) post.milestone_id = await this.milestoneId(ref, p, spec.milestone, actor.name);
-    return gitlabIssueResult(await this.gl<GitlabIssue>("POST", `/projects/${p}/issues`, actor.name, post));
+    return gitlabIssueResult(await this.gl<GitlabIssue>("POST", `/projects/${p}/issues`, actor.name, post),
+      { labels, assignees: spec.assignees, milestone: spec.milestone });
   }
 
   /** Author-gated like updatePullRequest: only an issue this identity's own
@@ -328,7 +346,7 @@ export class GitlabForge implements Forge {
     // GitLab replaces the label set from a comma list; "" clears it.
     if (labels !== undefined) put.labels = labels.join(",");
     if (spec.state !== undefined) put.state_event = spec.state === "closed" ? "close" : "reopen";
-    return gitlabIssueResult(await this.gl<GitlabIssue>("PUT", path, actor.name, put));
+    return gitlabIssueResult(await this.gl<GitlabIssue>("PUT", path, actor.name, put), { labels });
   }
 
   async comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult> {

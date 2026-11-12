@@ -28,3 +28,43 @@ export function matchLabels(ref: RepoRef, wanted: string[], existing: string[]):
   }
   return out;
 }
+
+/** What was asked for vs what the forge reports after an issue write. */
+export interface AppliedCheck {
+  requestedLabels?: string[];
+  resultLabels: string[];
+  requestedAssignees?: string[];
+  resultAssignees: string[];
+  requestedMilestone?: number;
+  resultMilestone?: number | null;
+}
+
+/** Both forges ACCEPT labels, assignees, and a milestone from an account
+ *  without enough access on the repo and then silently ignore them (GitHub
+ *  below triage, GitLab below Planner/Reporter). That cannot be checked
+ *  before the write, so it is reported after it: a warning naming whatever
+ *  was asked for and is missing, and — when a label list was sent, which
+ *  REPLACES the set — any label still present that was not asked for (a
+ *  clear or replace that did not take). Names compare case-insensitively.
+ *  Undefined when everything requested is in place. */
+export function appliedWarning(forge: string, c: AppliedCheck, why: string): string | undefined {
+  const has = (xs: string[]) => new Set(xs.map((x) => x.toLowerCase()));
+  const parts: string[] = [];
+  if (c.requestedLabels !== undefined) {
+    const got = has(c.resultLabels);
+    const want = has(c.requestedLabels);
+    const missing = c.requestedLabels.filter((l) => !got.has(l.toLowerCase()));
+    const extra = c.resultLabels.filter((l) => !want.has(l.toLowerCase()));
+    if (missing.length) parts.push(`did not apply labels ${missing.join(", ")}`);
+    if (extra.length) parts.push(`did not remove labels ${extra.join(", ")}`);
+  }
+  if (c.requestedAssignees !== undefined) {
+    const got = has(c.resultAssignees);
+    const missing = c.requestedAssignees.filter((a) => !got.has(a.toLowerCase()));
+    if (missing.length) parts.push(`did not apply assignees ${missing.join(", ")}`);
+  }
+  if (c.requestedMilestone !== undefined && c.resultMilestone !== c.requestedMilestone) {
+    parts.push(`did not apply milestone ${c.requestedMilestone}`);
+  }
+  return parts.length ? `${forge} accepted the write but ${parts.join("; ")}: ${why}` : undefined;
+}

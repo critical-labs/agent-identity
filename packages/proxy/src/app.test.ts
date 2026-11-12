@@ -1,6 +1,6 @@
 import type { AgentRecord, NoncesRepo } from "@agent-identity/api";
 import {
-  canonicalString, generateKeypair, sign,
+  canonicalString, generateKeypair, parseRepoAllowlist, publicView, sign,
   type ActivityEvent, type BlobSpec, type CommitChangesSpec, type CommitSpec,
   type IssueSpec, type IssueUpdateSpec, type PrSpec, type PrUpdateSpec, type RepoRef, type RepoVisibility, type SyncResult,
 } from "@agent-identity/shared";
@@ -894,6 +894,14 @@ describe("attested activity ledger", () => {
       repo: "o/r", number: 21, fields: "title,state",
     }));
     expect(JSON.stringify(ledger.events)).not.toMatch(/secret/);
+    // Which fields changed is keyed-ledger detail only: the summary — which
+    // the public tier passes through verbatim — names the issue, not the edit.
+    expect(ledger.events[1].summary).toBe("updated issue #21 on o/r");
+    const pub = publicView(
+      ledger.events.map((e) => ({ ...e, detail: { ...e.detail, repo: "critical-labs/x", visibility: "public" } })),
+      [], parseRepoAllowlist("critical-labs/*")).events;
+    expect(pub).toHaveLength(2);
+    expect(JSON.stringify(pub)).not.toMatch(/title|state|fields/);
   });
 
   it("stamps detail.visibility 'public' on forge events when the forge reports the repo public", async () => {

@@ -420,13 +420,17 @@ describe("GithubForge.openIssue (#144)", () => {
     const { fn, calls } = makeFetch({
       [LABELS]: { json: [{ name: "Bug" }, { name: "follow-up" }] },
       [`POST ${B}/issues`]: {
-        json: issueJson({ labels: [{ name: "Bug" }, { name: "follow-up" }], assignees: [{ login: "mc" }] }),
+        json: issueJson({
+          labels: [{ name: "Bug" }, { name: "follow-up" }], assignees: [{ login: "mc" }],
+          milestone: { number: 2 },
+        }),
       },
     });
     const forge = new GithubForge({ credentials, fetch: fn });
     const r = await forge.openIssue({ owner: "o", name: "r" }, {
       title: "t", body: "b", labels: ["bug", "follow-up"], assignees: ["mc"], milestone: 2,
     }, actor);
+    // Everything requested was applied, so no warning.
     expect(r).toEqual({
       number: 21, url: "https://github.com/o/r/issues/21", state: "open", labels: ["Bug", "follow-up"],
     });
@@ -521,6 +525,30 @@ describe("GithubForge.updateIssue (#144)", () => {
     const patch = calls.find((c) => c.init.method === "PATCH")!;
     expect(JSON.parse(patch.init.body as string)).toEqual({ state: "open", labels: [] });
     expect(calls.some((c) => c.url.includes("/labels"))).toBe(false);
+  });
+
+  it("warns when a label replace or clear did not take (github ignored it silently)", async () => {
+    const { fn } = makeFetch({
+      [`GET ${I}`]: { json: issueJson({ labels: [{ name: "bug" }] }) },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${I}`]: { json: issueJson({ labels: [{ name: "bug" }] }) },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.updateIssue({ owner: "o", name: "r" }, 21, { labels: [] }, ATTR, actor);
+    expect(r.labels).toEqual(["bug"]);
+    expect(r.warning).toMatch(/did not remove labels bug/);
+    expect(r.warning).toMatch(/triage/);
+  });
+
+  it("gives no warning when an update leaves labels exactly as requested", async () => {
+    const { fn } = makeFetch({
+      [`GET ${I}`]: { json: issueJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${I}`]: { json: issueJson({ labels: [] }) },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.updateIssue({ owner: "o", name: "r" }, 21, { labels: [], state: "closed" }, ATTR, actor);
+    expect(r.warning).toBeUndefined();
   });
 
   it("refuses an issue another account opened, before any write", async () => {

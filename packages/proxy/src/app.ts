@@ -409,7 +409,9 @@ export function createProxyApp(deps: ProxyDeps): Hono {
     return run(c, g, op, () => g.forge.updateIssue(ref, number, spec, attribution, g.actor),
       async (r) => ({
         type: "forge_issue_update",
-        summary: `updated issue #${r.number} on ${repo} (${fields})`,
+        // The summary is passed to the public tier verbatim, so it names the
+        // issue only; which fields changed stays in `detail` (keyed ledger).
+        summary: `updated issue #${r.number} on ${repo}`,
         detail: {
           service: g.service, repo, number: r.number, fields,
           ...(await visibilityStamp(g, [ref])),

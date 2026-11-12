@@ -201,7 +201,7 @@ server.registerTool(
 server.registerTool(
   "forge_open_issue",
   {
-    description: "File an issue on a SOURCE repo (not your fork) as this identity, via the forge proxy; returns number, url, state and the labels applied. Use it for follow-ups you drafted (e.g. review suggestions) so they carry agent attribution; start the body with 'Follow-up from PR #N' and then forge_comment on that PR linking the new issue. Send the body without a footer: the proxy appends one naming this identity. labels must already exist in the repo (matched case-insensitively): an unknown label is refused before anything is written, and the proxy never creates labels. assignees are logins/usernames; milestone is the milestone number shown on the forge. If the result has a warning, GitHub silently dropped labels/assignees because the bot account lacks triage access. service defaults to github.",
+    description: "File an issue on a SOURCE repo (not your fork) as this identity, via the forge proxy; returns number, url, state and the labels applied. Use it for follow-ups you drafted (e.g. review suggestions) so they carry agent attribution; start the body with 'Follow-up from PR #N' and then forge_comment on that PR linking the new issue. Send the body without a footer: the proxy appends one naming this identity. labels must already exist in the repo (matched case-insensitively): an unknown label is refused before anything is written, and the proxy never creates labels. assignees are logins/usernames; milestone is the milestone number shown on the forge. If the result has a warning, the forge silently did not apply some labels/assignees/milestone because the account lacks access on the repo (GitHub: triage; GitLab: Planner/Reporter). service defaults to github.",
     inputSchema: {
       service: z.string().optional(),
       owner: z.string(),
@@ -219,7 +219,7 @@ server.registerTool(
 server.registerTool(
   "forge_update_issue",
   {
-    description: "Edit an issue that this identity's account opened (on GitHub, any issue the shared bot account opened): title, body, labels (REPLACES the label set; [] clears it; each must already exist in the repo), and/or state (open|closed). At least one field is required. Send the body without attribution footers: the proxy keeps the existing ones and appends one naming this identity as the editor. An issue opened by any other account is refused (forbidden), and a pull request number is refused (use forge_update_pr). service defaults to github.",
+    description: "Edit an issue that this identity's account opened (on GitHub, any issue the shared bot account opened): title, body, labels (REPLACES the label set; [] clears it; each must already exist in the repo), and/or state (open|closed). At least one field is required. Send the body without attribution footers: the proxy keeps the existing ones and appends one naming this identity as the editor. An issue opened by any other account is refused (forbidden), and a pull request number is refused (use forge_update_pr). On GitHub all agents share one bot account, so this can edit another agent's issue: only touch issues you opened or were told to change. A warning in the result means a label change did not take. service defaults to github.",
     inputSchema: {
       service: z.string().optional(),
       owner: z.string(),

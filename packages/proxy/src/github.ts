@@ -4,7 +4,7 @@ import type {
   RepoInfo, RepoRef, RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import { canonicalCommitObject } from "./commit-object.js";
-import { matchLabels } from "./issue-labels.js";
+import { appliedWarning, matchLabels } from "./issue-labels.js";
 import { withProxyFooters } from "./pr-footers.js";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
@@ -27,37 +27,30 @@ interface GithubIssue {
   state: string;
   labels?: ({ name?: string } | string)[];
   assignees?: { login: string }[];
+  milestone?: { number: number } | null;
   pull_request?: unknown;
 }
 
-/** The IssueResult for an issue payload. GitHub ACCEPTS labels and
- *  assignees from an account without triage access but silently drops them,
- *  so whatever was requested and is missing from the result is surfaced as a
- *  warning instead of passing unnoticed. */
+/** The IssueResult for an issue payload, with a warning for anything GitHub
+ *  accepted but silently did not apply (see appliedWarning). */
 function issueResult(
-  issue: GithubIssue, requestedLabels: string[] | undefined, requestedAssignees: string[] | undefined,
+  issue: GithubIssue, requested: { labels?: string[]; assignees?: string[]; milestone?: number },
 ): IssueResult {
   const labels = (issue.labels ?? [])
     .map((l) => (typeof l === "string" ? l : l.name))
     .filter((l): l is string => typeof l === "string");
-  const lower = (xs: string[]) => new Set(xs.map((x) => x.toLowerCase()));
-  const haveLabels = lower(labels);
-  const haveAssignees = lower((issue.assignees ?? []).map((a) => a.login));
-  const droppedLabels = (requestedLabels ?? []).filter((l) => !haveLabels.has(l.toLowerCase()));
-  const droppedAssignees = (requestedAssignees ?? []).filter((a) => !haveAssignees.has(a.toLowerCase()));
-  const dropped = [
-    ...(droppedLabels.length ? [`labels ${droppedLabels.join(", ")}`] : []),
-    ...(droppedAssignees.length ? [`assignees ${droppedAssignees.join(", ")}`] : []),
-  ];
+  const warning = appliedWarning("github", {
+    requestedLabels: requested.labels, resultLabels: labels,
+    requestedAssignees: requested.assignees,
+    resultAssignees: (issue.assignees ?? []).map((a) => a.login),
+    requestedMilestone: requested.milestone, resultMilestone: issue.milestone?.number ?? null,
+  }, "the bot account likely lacks triage/push access on this repo (GitHub drops these silently)");
   return {
     number: issue.number,
     url: issue.html_url,
     state: issue.state === "closed" ? "closed" : "open",
     labels,
-    ...(dropped.length ? {
-      warning: `github accepted the write but did not apply ${dropped.join("; ")}: the bot `
-        + "account likely lacks triage/push access on this repo (GitHub drops these silently)",
-    } : {}),
+    ...(warning ? { warning } : {}),
   };
 }
 
@@ -345,7 +338,7 @@ export class GithubForge implements Forge {
     if (spec.assignees !== undefined) post.assignees = spec.assignees;
     if (spec.milestone !== undefined) post.milestone = spec.milestone;
     const issue = await this.gh<GithubIssue>("POST", `${r}/issues`, actor.name, post);
-    return issueResult(issue, labels, spec.assignees);
+    return issueResult(issue, { labels, assignees: spec.assignees, milestone: spec.milestone });
   }
 
   async updateIssue(
@@ -376,7 +369,7 @@ export class GithubForge implements Forge {
     if (labels !== undefined) patch.labels = labels;
     if (spec.state !== undefined) patch.state = spec.state;
     const updated = await this.gh<GithubIssue>("PATCH", path, actor.name, patch);
-    return issueResult(updated, labels, undefined);
+    return issueResult(updated, { labels });
   }
 
   async comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult> {

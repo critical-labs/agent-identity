@@ -102,7 +102,9 @@ const FORGE_RULES: Record<string, { repoFields: string[]; detailFields: string[]
   forge_pr_update: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_comment: { repoFields: ["repo"], detailFields: ["service", "repo", "issue"] },
   // An issue (#144) is shown by repo and number only: its title, body,
-  // labels, state, and which fields an update changed all stay private.
+  // labels, state, and which fields an update changed all stay private —
+  // `fields` is detail the projection drops, and the proxy keeps it out of
+  // the forge_issue_update summary (which is projected verbatim).
   forge_issue: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_issue_update: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_fork: { repoFields: ["source", "fork"], detailFields: ["service", "source", "fork"] },

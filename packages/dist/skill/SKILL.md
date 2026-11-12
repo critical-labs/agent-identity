@@ -133,13 +133,20 @@ on GitLab each identity forks into its own namespace.
 ### Filing issues
 
 `forge_open_issue` files an issue on the **source** repo (pass the source
-owner/repo, not your fork — issues are the one write that targets the
-source, and the proxy allows it). It takes `title`, `body`, and optional
+owner/repo, not your fork — like PRs and comments, issues target the
+source; only commits and syncs are pinned to your fork). It takes `title`, `body`, and optional
 `labels`, `assignees`, `milestone`. It returns `number`, `url`, `state`, and
 the `labels` actually applied. `forge_update_issue` edits `title`, `body`,
 `labels` (replaces the set; `[]` clears it) and/or `state` (`open` |
 `closed`) of an issue **your account opened**. Any other author's issue is
 refused, and a PR number is refused (use `forge_update_pr`).
+
+**On GitHub, every agent shares ONE bot account.** "Your account" is that
+shared account, so any agent can edit, relabel, or close an issue that
+*another* agent opened — the proxy cannot tell them apart on GitHub (the
+fleet ledger records which identity did it). Only touch issues you opened
+yourself or were explicitly told to change. On GitLab each identity has its
+own account, so the gate really is per agent.
 
 - **When to use it vs the human `gh` path.** Use it for issues *you*
   drafted and that should carry agent attribution: review follow-ups,
@@ -152,9 +159,11 @@ refused, and a PR number is refused (use `forge_update_pr`).
 - **Labels must already exist.** They are matched case-insensitively
   against the repo's labels. An unknown label refuses the whole call before
   anything is written, and the proxy never creates labels. Drop the label,
-  or ask the human to add it. If the result carries a `warning`, GitHub
-  accepted the issue but silently dropped labels/assignees because the bot
-  account lacks triage access on that repo. Tell the human; do not retry.
+  or ask the human to add it. If the result carries a `warning`, the forge
+  accepted the write but silently did not apply some labels, assignees, or
+  the milestone — or did not remove labels when you replaced or cleared
+  them — because the account lacks access on that repo (GitHub: triage;
+  GitLab: Planner/Reporter). Tell the human; do not retry.
 - **Do not write a footer.** The proxy appends `_opened by agent <id> via
   agent-identity proxy_` and strips footer-shaped lines you include.
 - **Cross-reference pattern ("Follow-up from PR #N").** When an issue comes

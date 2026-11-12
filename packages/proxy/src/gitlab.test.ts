@@ -268,7 +268,9 @@ describe("GitlabForge.openPullRequest and comment", () => {
         [LABELS]: { json: [{ name: "Bug" }, { name: "follow-up" }] },
         "GET https://gitlab.com/api/v4/users?username=mc": { json: [{ id: 5, username: "mc" }] },
         [`GET ${P}/milestones?iids[]=3`]: { json: [{ id: 77, iid: 3 }] },
-        [`POST ${P}/issues`]: { json: issue({ labels: ["Bug", "follow-up"] }) },
+        [`POST ${P}/issues`]: {
+          json: issue({ labels: ["Bug", "follow-up"], assignees: [{ username: "mc" }], milestone: { iid: 3 } }),
+        },
       });
       const forge = new GitlabForge({ credentials, fetch: fn });
       const r = await forge.openIssue({ owner: "o", name: "r" }, {
@@ -319,6 +321,39 @@ describe("GitlabForge.openPullRequest and comment", () => {
         labels: "",
         state_event: "close",
       });
+    });
+
+    it("warns when gitlab silently drops labels, assignees, or the milestone (role below Planner/Reporter)", async () => {
+      const { fn } = makeFetch({
+        [LABELS]: { json: [{ name: "bug" }] },
+        "GET https://gitlab.com/api/v4/users?username=mc": { json: [{ id: 5, username: "mc" }] },
+        [`GET ${P}/milestones?iids[]=3`]: { json: [{ id: 77, iid: 3 }] },
+        [`POST ${P}/issues`]: { json: issue({ labels: [], assignees: [], milestone: null }) },
+      });
+      const forge = new GitlabForge({ credentials, fetch: fn });
+      const r = await forge.openIssue({ owner: "o", name: "r" },
+        { title: "t", body: "b", labels: ["bug"], assignees: ["mc"], milestone: 3 }, actor);
+      expect(r.warning).toMatch(/gitlab accepted the write but did not apply/);
+      expect(r.warning).toMatch(/labels bug/);
+      expect(r.warning).toMatch(/assignees mc/);
+      expect(r.warning).toMatch(/milestone 3/);
+    });
+
+    it("gives no warning when gitlab applied everything, and warns when a label clear did not take", async () => {
+      const { fn } = makeFetch({
+        [LABELS]: { json: [{ name: "bug" }] },
+        "GET https://gitlab.com/api/v4/users?username=mc": { json: [{ id: 5, username: "mc" }] },
+        [`POST ${P}/issues`]: { json: issue({ labels: ["bug"], assignees: [{ username: "MC" }] }) },
+        [`GET ${P}/issues/21`]: { json: issue({ labels: ["bug"] }) },
+        [`PUT ${P}/issues/21`]: { json: issue({ labels: ["bug"] }) },
+      });
+      const forge = new GitlabForge({ credentials, fetch: fn });
+      const ok = await forge.openIssue({ owner: "o", name: "r" },
+        { title: "t", body: "b", labels: ["bug"], assignees: ["mc"] }, actor);
+      expect(ok.warning).toBeUndefined();
+      const r = await forge.updateIssue({ owner: "o", name: "r" }, 21, { labels: [] },
+        "_a by agent 1 via agent-identity proxy_", actor);
+      expect(r.warning).toMatch(/did not remove labels bug/);
     });
 
     it("refuses an issue another account opened, before any write", async () => {
