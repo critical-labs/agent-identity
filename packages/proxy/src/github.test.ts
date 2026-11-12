@@ -398,6 +398,171 @@ describe("GithubForge.updatePullRequest", () => {
   });
 });
 
+describe("GithubForge.openIssue (#144)", () => {
+  const LABELS = `GET ${B}/labels?per_page=100&page=1`;
+  const issueJson = (over: Record<string, unknown> = {}) => ({
+    number: 21, html_url: "https://github.com/o/r/issues/21", state: "open",
+    labels: [], assignees: [], ...over,
+  });
+
+  it("opens an issue with no labels without reading the label list", async () => {
+    const { fn, calls } = makeFetch({
+      [`POST ${B}/issues`]: { json: issueJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.openIssue({ owner: "o", name: "r" }, { title: "t", body: "b" }, actor);
+    expect(r).toEqual({ number: 21, url: "https://github.com/o/r/issues/21", state: "open", labels: [] });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.init.body as string)).toEqual({ title: "t", body: "b" });
+  });
+
+  it("validates labels against the repo's existing labels and sends the repo's spelling", async () => {
+    const { fn, calls } = makeFetch({
+      [LABELS]: { json: [{ name: "Bug" }, { name: "follow-up" }] },
+      [`POST ${B}/issues`]: {
+        json: issueJson({ labels: [{ name: "Bug" }, { name: "follow-up" }], assignees: [{ login: "mc" }] }),
+      },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.openIssue({ owner: "o", name: "r" }, {
+      title: "t", body: "b", labels: ["bug", "follow-up"], assignees: ["mc"], milestone: 2,
+    }, actor);
+    expect(r).toEqual({
+      number: 21, url: "https://github.com/o/r/issues/21", state: "open", labels: ["Bug", "follow-up"],
+    });
+    const post = calls.find((c) => c.init.method === "POST")!;
+    expect(JSON.parse(post.init.body as string)).toEqual({
+      title: "t", body: "b", labels: ["Bug", "follow-up"], assignees: ["mc"], milestone: 2,
+    });
+  });
+
+  it("refuses an unknown label with a clear invalid error and writes NOTHING", async () => {
+    const { fn, calls } = makeFetch({
+      [LABELS]: { json: [{ name: "bug" }] },
+      [`POST ${B}/issues`]: { json: issueJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const err = await forge.openIssue({ owner: "o", name: "r" },
+      { title: "t", body: "b", labels: ["bug", "brand-new", "other"] }, actor).catch((e) => e);
+    expect(err).toBeInstanceOf(ForgeError);
+    expect(err).toMatchObject({ kind: "invalid" });
+    expect(err.message).toMatch(/"brand-new", "other"/);
+    expect(err.message).toMatch(/never creates/);
+    expect(calls.some((c) => c.init.method === "POST")).toBe(false);
+  });
+
+  it("pages through the label list until a short page", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) => ({ name: `l${i}` }));
+    const { fn, calls } = makeFetch({
+      [LABELS]: { json: page1 },
+      [`GET ${B}/labels?per_page=100&page=2`]: { json: [{ name: "late" }] },
+      [`POST ${B}/issues`]: { json: issueJson({ labels: [{ name: "late" }] }) },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.openIssue({ owner: "o", name: "r" }, { title: "t", body: "b", labels: ["late"] }, actor);
+    expect(r.labels).toEqual(["late"]);
+    expect(calls.filter((c) => c.url.includes("/labels?"))).toHaveLength(2);
+  });
+
+  it("warns when github silently drops labels or assignees (no triage access on the repo)", async () => {
+    const { fn } = makeFetch({
+      [LABELS]: { json: [{ name: "bug" }] },
+      [`POST ${B}/issues`]: { json: issueJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.openIssue({ owner: "o", name: "r" },
+      { title: "t", body: "b", labels: ["bug"], assignees: ["mc"] }, actor);
+    expect(r.labels).toEqual([]);
+    expect(r.warning).toMatch(/bug/);
+    expect(r.warning).toMatch(/mc/);
+    expect(r.warning).toMatch(/triage|push/);
+  });
+});
+
+describe("GithubForge.updateIssue (#144)", () => {
+  const ATTR = "_description updated by agent 482913 via agent-identity proxy_";
+  const I = `${B}/issues/21`;
+  const issueJson = (over: Record<string, unknown> = {}) => ({
+    number: 21, html_url: "https://github.com/o/r/issues/21", state: "open",
+    body: "old\n\n_opened by agent 1 via agent-identity proxy_",
+    user: { login: "Critical-Agent-Zero" }, labels: [], ...over,
+  });
+
+  it("edits an issue the credential account opened, carrying footers forward", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${I}`]: { json: issueJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`GET ${B}/labels?per_page=100&page=1`]: { json: [{ name: "Done" }] },
+      [`PATCH ${I}`]: { json: issueJson({ state: "closed", labels: [{ name: "Done" }] }) },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const r = await forge.updateIssue({ owner: "o", name: "r" }, 21,
+      { title: "t2", body: "new", labels: ["done"], state: "closed" }, ATTR, actor);
+    expect(r).toEqual({
+      number: 21, url: "https://github.com/o/r/issues/21", state: "closed", labels: ["Done"],
+    });
+    const patch = calls.find((c) => c.init.method === "PATCH")!;
+    expect(JSON.parse(patch.init.body as string)).toEqual({
+      title: "t2",
+      body: `new\n\n_opened by agent 1 via agent-identity proxy_\n${ATTR}`,
+      labels: ["Done"],
+      state: "closed",
+    });
+  });
+
+  it("a state-only edit sends only the state, and an empty label list clears without a lookup", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${I}`]: { json: issueJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${I}`]: { json: issueJson({ state: "open" }) },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await forge.updateIssue({ owner: "o", name: "r" }, 21, { state: "open", labels: [] }, ATTR, actor);
+    const patch = calls.find((c) => c.init.method === "PATCH")!;
+    expect(JSON.parse(patch.init.body as string)).toEqual({ state: "open", labels: [] });
+    expect(calls.some((c) => c.url.includes("/labels"))).toBe(false);
+  });
+
+  it("refuses an issue another account opened, before any write", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${I}`]: { json: issueJson({ user: { login: "a-human" } }) },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${I}`]: { json: issueJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.updateIssue({ owner: "o", name: "r" }, 21, { state: "closed" }, ATTR, actor))
+      .rejects.toMatchObject({ kind: "forbidden" });
+    expect(calls.some((c) => c.init.method === "PATCH")).toBe(false);
+  });
+
+  it("refuses a pull request number and points at forge_update_pr", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${I}`]: { json: issueJson({ pull_request: { url: "x" } }) },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`PATCH ${I}`]: { json: issueJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    const err = await forge.updateIssue({ owner: "o", name: "r" }, 21, { title: "x" }, ATTR, actor)
+      .catch((e) => e);
+    expect(err).toMatchObject({ kind: "invalid" });
+    expect(err.message).toMatch(/forge_update_pr/);
+    expect(calls.some((c) => c.init.method === "PATCH")).toBe(false);
+  });
+
+  it("refuses an unknown label on update before any write", async () => {
+    const { fn, calls } = makeFetch({
+      [`GET ${I}`]: { json: issueJson() },
+      "GET https://api.github.com/user": { json: { login: "critical-agent-zero" } },
+      [`GET ${B}/labels?per_page=100&page=1`]: { json: [] },
+      [`PATCH ${I}`]: { json: issueJson() },
+    });
+    const forge = new GithubForge({ credentials, fetch: fn });
+    await expect(forge.updateIssue({ owner: "o", name: "r" }, 21, { labels: ["x"] }, ATTR, actor))
+      .rejects.toMatchObject({ kind: "invalid" });
+    expect(calls.some((c) => c.init.method === "PATCH")).toBe(false);
+  });
+});
+
 describe("GithubForge.fork", () => {
   it("forks under the credential account and returns the fork coordinates", async () => {
     const { fn, calls } = makeFetch({

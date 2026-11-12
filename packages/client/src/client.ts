@@ -2,7 +2,8 @@ import {
   canonicalString, sign, type ActivityEvent, type AgentIdentity, type AgentStatusState,
   type AgentStatusView, type BlobResult, type CommentResult, type CommitChangesSpec,
   type CommitResult, type CommitSpec, type EmailFull, type EmailSummary, type ForgeProvisionResult,
-  type ForkResult, type Keypair, type PrResult, type PrSpec, type PrUpdateSpec,
+  type ForkResult, type IssueResult, type IssueSpec, type IssueUpdateSpec,
+  type Keypair, type PrResult, type PrSpec, type PrUpdateSpec,
   type RegisterResponse, type RepoInfo, type RepoRef, type SyncResult,
 } from "@agent-identity/shared";
 
@@ -162,6 +163,22 @@ export class AgentIdentityClient {
    *  forward itself; send the body WITHOUT footers. */
   forgeUpdatePr(service: string, ref: RepoRef, number: number, spec: PrUpdateSpec): Promise<PrResult> {
     return this.request("POST", `/forge/${service}/pr-update`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, number, ...spec }));
+  }
+
+  /** Open an issue on a SOURCE repo (#144). Labels must already exist in
+   *  the repo (the proxy refuses unknown ones and never creates them); send
+   *  the body WITHOUT a footer — the proxy appends the attribution. */
+  forgeOpenIssue(service: string, ref: RepoRef, spec: IssueSpec): Promise<IssueResult> {
+    return this.request("POST", `/forge/${service}/issue`,
+      JSON.stringify({ owner: ref.owner, repo: ref.name, ...spec }));
+  }
+
+  /** Edit title / body / labels / state of an issue this identity's account
+   *  opened (#144). The proxy refuses any other author's issue and carries
+   *  the attribution footers forward itself. */
+  forgeUpdateIssue(service: string, ref: RepoRef, number: number, spec: IssueUpdateSpec): Promise<IssueResult> {
+    return this.request("POST", `/forge/${service}/issue-update`,
       JSON.stringify({ owner: ref.owner, repo: ref.name, number, ...spec }));
   }
 

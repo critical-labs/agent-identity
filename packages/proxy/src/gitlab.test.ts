@@ -255,6 +255,85 @@ describe("GitlabForge.openPullRequest and comment", () => {
     expect(calls.some((c) => c.init.method === "PUT")).toBe(false);
   });
 
+  describe("issues (#144)", () => {
+    const LABELS = `GET ${P}/labels?per_page=100&page=1`;
+    const issue = (over: Record<string, unknown> = {}) => ({
+      iid: 21, web_url: "https://gitlab.com/o/r/-/issues/21", state: "opened", labels: [],
+      description: "old\n\n_opened by agent 482913 via agent-identity proxy_",
+      author: { username: "agent-482913" }, ...over,
+    });
+
+    it("opens an issue, resolving labels, assignee usernames, and the milestone iid", async () => {
+      const { fn, calls } = makeFetch({
+        [LABELS]: { json: [{ name: "Bug" }, { name: "follow-up" }] },
+        "GET https://gitlab.com/api/v4/users?username=mc": { json: [{ id: 5, username: "mc" }] },
+        [`GET ${P}/milestones?iids[]=3`]: { json: [{ id: 77, iid: 3 }] },
+        [`POST ${P}/issues`]: { json: issue({ labels: ["Bug", "follow-up"] }) },
+      });
+      const forge = new GitlabForge({ credentials, fetch: fn });
+      const r = await forge.openIssue({ owner: "o", name: "r" }, {
+        title: "t", body: "b", labels: ["bug", "follow-up"], assignees: ["mc"], milestone: 3,
+      }, actor);
+      expect(r).toEqual({
+        number: 21, url: "https://gitlab.com/o/r/-/issues/21", state: "open", labels: ["Bug", "follow-up"],
+      });
+      const post = calls.find((c) => c.init.method === "POST")!;
+      expect(JSON.parse(post.init.body as string)).toEqual({
+        title: "t", description: "b", labels: "Bug,follow-up", assignee_ids: [5], milestone_id: 77,
+      });
+    });
+
+    it("refuses an unknown label, assignee, or milestone before any write", async () => {
+      const { fn, calls } = makeFetch({
+        [LABELS]: { json: [{ name: "bug" }] },
+        "GET https://gitlab.com/api/v4/users?username=ghost": { json: [] },
+        [`GET ${P}/milestones?iids[]=9`]: { json: [] },
+        [`POST ${P}/issues`]: { json: issue() },
+      });
+      const forge = new GitlabForge({ credentials, fetch: fn });
+      const ref = { owner: "o", name: "r" };
+      await expect(forge.openIssue(ref, { title: "t", body: "b", labels: ["nope"] }, actor))
+        .rejects.toMatchObject({ kind: "invalid", message: expect.stringMatching(/"nope".*never creates/) });
+      await expect(forge.openIssue(ref, { title: "t", body: "b", assignees: ["ghost"] }, actor))
+        .rejects.toMatchObject({ kind: "invalid", message: expect.stringContaining("ghost") });
+      await expect(forge.openIssue(ref, { title: "t", body: "b", milestone: 9 }, actor))
+        .rejects.toMatchObject({ kind: "invalid", message: expect.stringContaining("9") });
+      expect(calls.some((c) => c.init.method === "POST")).toBe(false);
+    });
+
+    it("updates an issue its own service account opened: footers carried, state as state_event", async () => {
+      const ATTR = "_description updated by agent 482913 via agent-identity proxy_";
+      const { fn, calls } = makeFetch({
+        [`GET ${P}/issues/21`]: { json: issue() },
+        [`PUT ${P}/issues/21`]: { json: issue({ state: "closed" }) },
+      });
+      const forge = new GitlabForge({ credentials, fetch: fn });
+      const r = await forge.updateIssue({ owner: "o", name: "r" }, 21,
+        { body: "new", labels: [], state: "closed" }, ATTR, actor);
+      expect(r).toEqual({
+        number: 21, url: "https://gitlab.com/o/r/-/issues/21", state: "closed", labels: [],
+      });
+      const put = calls.find((c) => c.init.method === "PUT")!;
+      expect(JSON.parse(put.init.body as string)).toEqual({
+        description: `new\n\n_opened by agent 482913 via agent-identity proxy_\n${ATTR}`,
+        labels: "",
+        state_event: "close",
+      });
+    });
+
+    it("refuses an issue another account opened, before any write", async () => {
+      const { fn, calls } = makeFetch({
+        [`GET ${P}/issues/21`]: { json: issue({ author: { username: "agent-999" } }) },
+        [`PUT ${P}/issues/21`]: { json: issue() },
+      });
+      const forge = new GitlabForge({ credentials, fetch: fn });
+      await expect(forge.updateIssue({ owner: "o", name: "r" }, 21, { state: "open" },
+        "_a by agent 1 via agent-identity proxy_", actor))
+        .rejects.toMatchObject({ kind: "forbidden" });
+      expect(calls.some((c) => c.init.method === "PUT")).toBe(false);
+    });
+  });
+
   it("comments as an issue note with a constructed url", async () => {
     const { fn } = makeFetch({
       [`POST ${P}/issues/12/notes`]: { json: { id: 55 } },

@@ -349,6 +349,40 @@ export function makeTools(manager: ClaimManager, env: ForgeEnv = defaultForgeEnv
       }
     },
 
+    async forgeOpenIssue(args: {
+      service?: string; owner: string; repo: string; title: string; body: string;
+      labels?: string[]; assignees?: string[]; milestone?: number;
+    }) {
+      try {
+        return await manager.client().forgeOpenIssue(args.service ?? "github",
+          { owner: args.owner, name: args.repo }, {
+            title: args.title, body: args.body,
+            ...(args.labels !== undefined ? { labels: args.labels } : {}),
+            ...(args.assignees !== undefined ? { assignees: args.assignees } : {}),
+            ...(args.milestone !== undefined ? { milestone: args.milestone } : {}),
+          });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
+    async forgeUpdateIssue(args: {
+      service?: string; owner: string; repo: string; number: number;
+      title?: string; body?: string; labels?: string[]; state?: "open" | "closed";
+    }) {
+      try {
+        return await manager.client().forgeUpdateIssue(args.service ?? "github",
+          { owner: args.owner, name: args.repo }, args.number, {
+            ...(args.title !== undefined ? { title: args.title } : {}),
+            ...(args.body !== undefined ? { body: args.body } : {}),
+            ...(args.labels !== undefined ? { labels: args.labels } : {}),
+            ...(args.state !== undefined ? { state: args.state } : {}),
+          });
+      } catch (err) {
+        return { error: (err as Error).message };
+      }
+    },
+
     async forgeComment(args: {
       service?: string; owner: string; repo: string; issue: number; body: string;
     }) {

@@ -101,6 +101,10 @@ const FORGE_RULES: Record<string, { repoFields: string[]; detailFields: string[]
   // An update names the PR it edited; which fields changed stays private.
   forge_pr_update: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_comment: { repoFields: ["repo"], detailFields: ["service", "repo", "issue"] },
+  // An issue (#144) is shown by repo and number only: its title, body,
+  // labels, state, and which fields an update changed all stay private.
+  forge_issue: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
+  forge_issue_update: { repoFields: ["repo"], detailFields: ["service", "repo", "number"] },
   forge_fork: { repoFields: ["source", "fork"], detailFields: ["service", "source", "fork"] },
   // A sync names only the fork: the upstream it synced from is the forge's
   // choice, not a field the agent supplied, and the event carries no ref.

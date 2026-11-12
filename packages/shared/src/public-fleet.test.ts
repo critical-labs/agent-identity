@@ -224,6 +224,20 @@ describe("publicView — forge visibility gate", () => {
     expect(shown[0]?.detail).toEqual({ service: "github", repo: "critical-labs/core", number: 7 });
   });
 
+  it("projects forge_issue and forge_issue_update as repo + number only (#144)", () => {
+    for (const type of ["forge_issue", "forge_issue_update"] as const) {
+      const e = ev({
+        type,
+        detail: { service: "github", repo: "critical-labs/core", number: 21, fields: "title,state" },
+      });
+      expect(publicView([e], [], ALLOW).events, type).toEqual([]);
+      const shown = publicView(
+        [{ ...e, detail: { ...e.detail, visibility: "public" } }], [], ALLOW).events;
+      expect(shown, type).toHaveLength(1);
+      expect(shown[0]?.detail, type).toEqual({ service: "github", repo: "critical-labs/core", number: 21 });
+    }
+  });
+
   it("gates every forge type, fork included", () => {
     const fork = ev({
       type: "forge_fork",

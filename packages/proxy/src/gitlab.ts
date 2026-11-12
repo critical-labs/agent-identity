@@ -1,13 +1,34 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
-  ForkResult, PrResult, PrSpec, PrUpdateSpec, RepoInfo, RepoRef,
-  RepoVisibility, SyncResult,
+  ForkResult, IssueResult, IssueSpec, IssueUpdateSpec, PrResult, PrSpec, PrUpdateSpec,
+  RepoInfo, RepoRef, RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
 } from "./forge.js";
 import { gitlabServiceAccountUsername } from "./gitlab-names.js";
+import { matchLabels } from "./issue-labels.js";
 import { withProxyFooters } from "./pr-footers.js";
+
+/** Upper bound on label-list pages read per issue write (100 per page). */
+const LABEL_PAGES = 10;
+
+/** The parts of a GitLab issue payload the issue ops read. */
+interface GitlabIssue {
+  iid: number;
+  web_url: string;
+  state: string;          // "opened" | "closed"
+  labels?: string[];
+}
+
+function gitlabIssueResult(issue: GitlabIssue): IssueResult {
+  return {
+    number: issue.iid,
+    url: issue.web_url,
+    state: issue.state === "closed" ? "closed" : "open",
+    labels: (issue.labels ?? []).filter((l): l is string => typeof l === "string"),
+  };
+}
 
 export interface GitlabForgeOptions {
   credentials: CredentialStore;
@@ -225,6 +246,89 @@ export class GitlabForge implements Forge {
     }
     const updated = await this.gl<{ iid: number; web_url: string }>("PUT", path, actor.name, put);
     return { number: updated.iid, url: updated.web_url };
+  }
+
+  /** Labels the project can apply (its own and its ancestor groups'), paged
+   *  100 at a time and capped like the GitHub adapter: a label beyond the
+   *  cap reads as unknown, which fails closed. */
+  private async projectLabels(p: string, agentId: string): Promise<string[]> {
+    const names: string[] = [];
+    for (let page = 1; page <= LABEL_PAGES; page++) {
+      const batch = await this.gl<{ name: string }[]>(
+        "GET", `/projects/${p}/labels?per_page=100&page=${page}`, agentId);
+      names.push(...batch.map((l) => l.name));
+      if (batch.length < 100) break;
+    }
+    return names;
+  }
+
+  private async resolveLabels(
+    ref: RepoRef, p: string, wanted: string[] | undefined, agentId: string,
+  ): Promise<string[] | undefined> {
+    if (!wanted || wanted.length === 0) return wanted;
+    return matchLabels(ref, wanted, await this.projectLabels(p, agentId));
+  }
+
+  /** GitLab assigns by user id; resolve each username first so an unknown
+   *  one is refused before the write rather than silently ignored. */
+  private async assigneeIds(usernames: string[], agentId: string): Promise<number[]> {
+    const ids: number[] = [];
+    for (const u of usernames) {
+      const users = await this.gl<{ id: number; username: string }[]>(
+        "GET", `/users?username=${encodeURIComponent(u)}`, agentId);
+      const hit = users.find((x) => x.username.toLowerCase() === u.toLowerCase());
+      if (!hit) throw new ForgeError("invalid", `unknown gitlab assignee "${u}"`, 422);
+      ids.push(hit.id);
+    }
+    return ids;
+  }
+
+  /** `milestone` is the project milestone's iid (the %N the UI shows); the
+   *  issues API wants its global id. */
+  private async milestoneId(ref: RepoRef, p: string, iid: number, agentId: string): Promise<number> {
+    const ms = await this.gl<{ id: number; iid: number }[]>(
+      "GET", `/projects/${p}/milestones?iids[]=${iid}`, agentId);
+    const hit = ms.find((m) => m.iid === iid);
+    if (!hit) throw new ForgeError("invalid", `no milestone %${iid} on ${ref.owner}/${ref.name}`, 422);
+    return hit.id;
+  }
+
+  async openIssue(ref: RepoRef, spec: IssueSpec, actor: Author): Promise<IssueResult> {
+    const p = this.project(ref);
+    // Every lookup runs before the write, so any unknown value creates nothing.
+    const labels = await this.resolveLabels(ref, p, spec.labels, actor.name);
+    const post: Record<string, unknown> = { title: spec.title, description: spec.body };
+    if (labels !== undefined) post.labels = labels.join(",");
+    if (spec.assignees !== undefined) post.assignee_ids = await this.assigneeIds(spec.assignees, actor.name);
+    if (spec.milestone !== undefined) post.milestone_id = await this.milestoneId(ref, p, spec.milestone, actor.name);
+    return gitlabIssueResult(await this.gl<GitlabIssue>("POST", `/projects/${p}/issues`, actor.name, post));
+  }
+
+  /** Author-gated like updatePullRequest: only an issue this identity's own
+   *  service account opened can be edited. */
+  async updateIssue(
+    ref: RepoRef, number: number, spec: IssueUpdateSpec, attribution: string, actor: Author,
+  ): Promise<IssueResult> {
+    const p = this.project(ref);
+    const path = `/projects/${p}/issues/${number}`;
+    const issue = await this.gl<GitlabIssue & { description: string | null; author: { username: string } }>(
+      "GET", path, actor.name);
+    const me = gitlabServiceAccountUsername(actor.name);
+    if (issue.author.username !== me) {
+      throw new ForgeError("forbidden",
+        `issue #${number} on ${ref.owner}/${ref.name} was opened by ${issue.author.username}, `
+        + `not by this identity (${me}); only its own issues can be edited`, 403);
+    }
+    const labels = await this.resolveLabels(ref, p, spec.labels, actor.name);
+    const put: Record<string, unknown> = {};
+    if (spec.title !== undefined) put.title = spec.title;
+    if (spec.body !== undefined) {
+      put.description = withProxyFooters(issue.description ?? "", spec.body, attribution);
+    }
+    // GitLab replaces the label set from a comma list; "" clears it.
+    if (labels !== undefined) put.labels = labels.join(",");
+    if (spec.state !== undefined) put.state_event = spec.state === "closed" ? "close" : "reopen";
+    return gitlabIssueResult(await this.gl<GitlabIssue>("PUT", path, actor.name, put));
   }
 
   async comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult> {

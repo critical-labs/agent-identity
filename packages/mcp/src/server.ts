@@ -199,6 +199,42 @@ server.registerTool(
 );
 
 server.registerTool(
+  "forge_open_issue",
+  {
+    description: "File an issue on a SOURCE repo (not your fork) as this identity, via the forge proxy; returns number, url, state and the labels applied. Use it for follow-ups you drafted (e.g. review suggestions) so they carry agent attribution; start the body with 'Follow-up from PR #N' and then forge_comment on that PR linking the new issue. Send the body without a footer: the proxy appends one naming this identity. labels must already exist in the repo (matched case-insensitively): an unknown label is refused before anything is written, and the proxy never creates labels. assignees are logins/usernames; milestone is the milestone number shown on the forge. If the result has a warning, GitHub silently dropped labels/assignees because the bot account lacks triage access. service defaults to github.",
+    inputSchema: {
+      service: z.string().optional(),
+      owner: z.string(),
+      repo: z.string(),
+      title: z.string().min(1),
+      body: z.string(),
+      labels: z.array(z.string().min(1)).optional(),
+      assignees: z.array(z.string().min(1)).optional(),
+      milestone: z.number().int().positive().optional(),
+    },
+  },
+  async (args) => json(await tools.forgeOpenIssue(args)),
+);
+
+server.registerTool(
+  "forge_update_issue",
+  {
+    description: "Edit an issue that this identity's account opened (on GitHub, any issue the shared bot account opened): title, body, labels (REPLACES the label set; [] clears it; each must already exist in the repo), and/or state (open|closed). At least one field is required. Send the body without attribution footers: the proxy keeps the existing ones and appends one naming this identity as the editor. An issue opened by any other account is refused (forbidden), and a pull request number is refused (use forge_update_pr). service defaults to github.",
+    inputSchema: {
+      service: z.string().optional(),
+      owner: z.string(),
+      repo: z.string(),
+      number: z.number().int().positive(),
+      title: z.string().min(1).optional(),
+      body: z.string().optional(),
+      labels: z.array(z.string().min(1)).optional(),
+      state: z.enum(["open", "closed"]).optional(),
+    },
+  },
+  async (args) => json(await tools.forgeUpdateIssue(args)),
+);
+
+server.registerTool(
   "forge_comment",
   {
     description: "Comment on an issue via the forge proxy. An attribution footer naming this identity is appended.",

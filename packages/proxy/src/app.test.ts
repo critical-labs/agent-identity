@@ -2,7 +2,7 @@ import type { AgentRecord, NoncesRepo } from "@agent-identity/api";
 import {
   canonicalString, generateKeypair, sign,
   type ActivityEvent, type BlobSpec, type CommitChangesSpec, type CommitSpec,
-  type PrSpec, type PrUpdateSpec, type RepoRef, type RepoVisibility, type SyncResult,
+  type IssueSpec, type IssueUpdateSpec, type PrSpec, type PrUpdateSpec, type RepoRef, type RepoVisibility, type SyncResult,
 } from "@agent-identity/shared";
 import { describe, expect, it, vi } from "vitest";
 import { createProxyApp, type ProxyDeps } from "./app.js";
@@ -66,6 +66,16 @@ export class FakeForge implements Forge {
     this.calls.push(["updatePullRequest", ref, number, spec, attribution, actor]);
     if (this.failWith) throw this.failWith;
     return { number, url: `https://forge/pr/${number}` };
+  }
+  async openIssue(ref: RepoRef, spec: IssueSpec, actor: Author) {
+    this.calls.push(["openIssue", ref, spec, actor]);
+    if (this.failWith) throw this.failWith;
+    return { number: 21, url: "https://forge/issues/21", state: "open" as const, labels: spec.labels ?? [] };
+  }
+  async updateIssue(ref: RepoRef, number: number, spec: IssueUpdateSpec, attribution: string, actor: Author) {
+    this.calls.push(["updateIssue", ref, number, spec, attribution, actor]);
+    if (this.failWith) throw this.failWith;
+    return { number, url: `https://forge/issues/${number}`, state: spec.state ?? "open", labels: [] };
   }
   async comment(ref: RepoRef, issue: number, body: string, actor: Author) {
     this.calls.push(["comment", ref, issue, body, actor]);
@@ -455,6 +465,146 @@ describe("POST /forge/:service/pr and /comment", () => {
   });
 });
 
+describe("issue routes (#144)", () => {
+  const actorOf = { name: "482913", email: "482913@agents.example" };
+
+  it("opens an issue with the attribution footer appended and the optional fields passed through", async () => {
+    const path = "/forge/github/issue";
+    const body = JSON.stringify({
+      owner: "o", repo: "r", title: "Follow-up", body: "Follow-up from PR #7",
+      labels: ["bug"], assignees: ["someone"], milestone: 3,
+    });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      number: 21, url: "https://forge/issues/21", state: "open", labels: ["bug"],
+    });
+    expect(forge.calls[0]).toEqual([
+      "openIssue", { owner: "o", name: "r" },
+      {
+        title: "Follow-up",
+        body: "Follow-up from PR #7\n\n_opened by agent 482913 via agent-identity proxy_",
+        labels: ["bug"], assignees: ["someone"], milestone: 3,
+      },
+      actorOf,
+    ]);
+  });
+
+  it("strips footer-shaped lines the agent wrote itself, so an issue cannot claim another opener", async () => {
+    const path = "/forge/github/issue";
+    const body = JSON.stringify({
+      owner: "o", repo: "r", title: "t",
+      body: "text\n_opened by agent 999999 via agent-identity proxy_",
+    });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    const spec = forge.calls[0]![2] as IssueSpec;
+    expect(spec.body).toBe("text\n\n_opened by agent 482913 via agent-identity proxy_");
+    // Optional fields the caller left out are not sent at all.
+    expect(spec).toEqual({ title: "t", body: spec.body });
+  });
+
+  it("400s a malformed issue request before the forge is reached", async () => {
+    const path = "/forge/github/issue";
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    for (const b of [
+      { owner: "o", repo: "r", body: "no title" },
+      { owner: "o", repo: "r", title: "", body: "x" },
+      { owner: "o", repo: "r", title: "t" },
+      { owner: "..", repo: "r", title: "t", body: "x" },
+      { owner: "o", repo: "r/../x", title: "t", body: "x" },
+      { owner: "o", repo: "r", title: "t", body: "x", labels: "bug" },
+      { owner: "o", repo: "r", title: "t", body: "x", labels: ["bug", ""] },
+      { owner: "o", repo: "r", title: "t", body: "x", labels: [1] },
+      { owner: "o", repo: "r", title: "t", body: "x", assignees: [""] },
+      { owner: "o", repo: "r", title: "t", body: "x", milestone: 0 },
+      { owner: "o", repo: "r", title: "t", body: "x", milestone: "3" },
+    ]) {
+      const body = JSON.stringify(b);
+      const res = await app.request(path, { ...signed("POST", path, body), body });
+      expect(res.status, JSON.stringify(b)).toBe(400);
+    }
+    expect(forge.calls).toEqual([]);
+  });
+
+  it("relays the forge's unknown-label refusal as 400 invalid with its detail", async () => {
+    const path = "/forge/github/issue";
+    const body = JSON.stringify({ owner: "o", repo: "r", title: "t", body: "x", labels: ["nope"] });
+    const { deps, forge } = makeDeps();
+    forge.failWith = new ForgeError("invalid", 'unknown label(s) on o/r: "nope"', 422);
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "invalid", detail: 'unknown label(s) on o/r: "nope"' });
+  });
+
+  it("files an issue on the SOURCE repo under the fork-namespace policy (issues are not fork-pinned)", async () => {
+    const path = "/forge/github/issue";
+    const body = JSON.stringify({ owner: "critical-labs", repo: "agent-identity", title: "t", body: "x" });
+    const { deps, forge } = makeDeps({ policy: forkNamespacePolicy({ githubForkOwner: "critical-agent-zero" }) });
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(forge.calls[0]![0]).toBe("openIssue");
+  });
+
+  it("updates an issue, passing only the given fields and the attribution line", async () => {
+    const path = "/forge/github/issue-update";
+    const body = JSON.stringify({
+      owner: "o", repo: "r", number: 21, body: "rewritten", labels: [], state: "closed",
+    });
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({
+      number: 21, url: "https://forge/issues/21", state: "closed", labels: [],
+    });
+    expect(forge.calls[0]).toEqual([
+      "updateIssue", { owner: "o", name: "r" }, 21,
+      { body: "rewritten", labels: [], state: "closed" },
+      "_description updated by agent 482913 via agent-identity proxy_",
+      actorOf,
+    ]);
+  });
+
+  it("400s an issue update with no fields, a bad state, or a bad number", async () => {
+    const path = "/forge/github/issue-update";
+    const { deps, forge } = makeDeps();
+    const app = createProxyApp(deps);
+    for (const b of [
+      { owner: "o", repo: "r", number: 21 },
+      { owner: "o", repo: "r", number: 21, state: "opened" },
+      { owner: "o", repo: "r", number: 21, title: "" },
+      { owner: "o", repo: "r", number: 21, labels: [""] },
+      { owner: "o", repo: "r", number: 0, title: "t" },
+      { owner: "o", repo: "r", number: "21", title: "t" },
+      { owner: "..", repo: "r", number: 21, title: "t" },
+    ]) {
+      const body = JSON.stringify(b);
+      const res = await app.request(path, { ...signed("POST", path, body), body });
+      expect(res.status, JSON.stringify(b)).toBe(400);
+    }
+    expect(forge.calls).toEqual([]);
+  });
+
+  it("relays the forge's author refusal on an issue update as 403 forbidden", async () => {
+    const path = "/forge/github/issue-update";
+    const body = JSON.stringify({ owner: "o", repo: "r", number: 21, state: "closed" });
+    const { deps, forge } = makeDeps();
+    forge.failWith = new ForgeError("forbidden", "issue #21 was opened by someone-else", 403);
+    const app = createProxyApp(deps);
+    const res = await app.request(path, { ...signed("POST", path, body), body });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: "forbidden", detail: "issue #21 was opened by someone-else" });
+  });
+});
+
 describe("POST /forge/:service/provision", () => {
   it("provisions via the registered provisioner and audits", async () => {
     const provision = vi.fn(async () => ({ username: "agent-482913", email: "482913@agents.example" }));
@@ -723,6 +873,27 @@ describe("attested activity ledger", () => {
     expect(ledger.events[2].detail).toEqual(expect.objectContaining({
       source: "o/r", fork: "fork-acct/r",
     }));
+  });
+
+  it("writes forge_issue and forge_issue_update events that never carry the title or body", async () => {
+    const { deps, ledger } = ledgered();
+    const app = createProxyApp(deps);
+
+    const iPath = "/forge/github/issue";
+    const iBody = JSON.stringify({ owner: "o", repo: "r", title: "secret title", body: "secret body" });
+    await app.request(iPath, { ...signed("POST", iPath, iBody), body: iBody });
+
+    const uPath = "/forge/github/issue-update";
+    const uBody = JSON.stringify({ owner: "o", repo: "r", number: 21, title: "new secret", state: "closed" });
+    await app.request(uPath, { ...signed("POST", uPath, uBody), body: uBody });
+
+    expect(ledger.events.map((e) => e.type)).toEqual(["forge_issue", "forge_issue_update"]);
+    expect(ledger.events[0].detail).toEqual(expect.objectContaining({ repo: "o/r", number: 21 }));
+    expect(ledger.events[0].ref).toBe("https://forge/issues/21");
+    expect(ledger.events[1].detail).toEqual(expect.objectContaining({
+      repo: "o/r", number: 21, fields: "title,state",
+    }));
+    expect(JSON.stringify(ledger.events)).not.toMatch(/secret/);
   });
 
   it("stamps detail.visibility 'public' on forge events when the forge reports the repo public", async () => {

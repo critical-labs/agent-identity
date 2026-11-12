@@ -1,9 +1,10 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
-  ForkResult, PrResult, PrSpec, PrUpdateSpec, RepoInfo, RepoRef,
-  RepoVisibility, SyncResult,
+  ForkResult, IssueResult, IssueSpec, IssueUpdateSpec, PrResult, PrSpec, PrUpdateSpec,
+  RepoInfo, RepoRef, RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 import { canonicalCommitObject } from "./commit-object.js";
+import { matchLabels } from "./issue-labels.js";
 import { withProxyFooters } from "./pr-footers.js";
 import {
   ForgeError, type Author, type CredentialStore, type Forge,
@@ -14,6 +15,50 @@ import {
 const MERGE_TYPES: ReadonlySet<string> = new Set(["fast-forward", "merge", "none"]);
 function isMergeType(value: unknown): value is SyncResult["mergeType"] {
   return typeof value === "string" && MERGE_TYPES.has(value);
+}
+
+/** Upper bound on label-list pages read per issue write (100 per page). */
+const LABEL_PAGES = 10;
+
+/** The parts of a GitHub issue payload the issue ops read. */
+interface GithubIssue {
+  number: number;
+  html_url: string;
+  state: string;
+  labels?: ({ name?: string } | string)[];
+  assignees?: { login: string }[];
+  pull_request?: unknown;
+}
+
+/** The IssueResult for an issue payload. GitHub ACCEPTS labels and
+ *  assignees from an account without triage access but silently drops them,
+ *  so whatever was requested and is missing from the result is surfaced as a
+ *  warning instead of passing unnoticed. */
+function issueResult(
+  issue: GithubIssue, requestedLabels: string[] | undefined, requestedAssignees: string[] | undefined,
+): IssueResult {
+  const labels = (issue.labels ?? [])
+    .map((l) => (typeof l === "string" ? l : l.name))
+    .filter((l): l is string => typeof l === "string");
+  const lower = (xs: string[]) => new Set(xs.map((x) => x.toLowerCase()));
+  const haveLabels = lower(labels);
+  const haveAssignees = lower((issue.assignees ?? []).map((a) => a.login));
+  const droppedLabels = (requestedLabels ?? []).filter((l) => !haveLabels.has(l.toLowerCase()));
+  const droppedAssignees = (requestedAssignees ?? []).filter((a) => !haveAssignees.has(a.toLowerCase()));
+  const dropped = [
+    ...(droppedLabels.length ? [`labels ${droppedLabels.join(", ")}`] : []),
+    ...(droppedAssignees.length ? [`assignees ${droppedAssignees.join(", ")}`] : []),
+  ];
+  return {
+    number: issue.number,
+    url: issue.html_url,
+    state: issue.state === "closed" ? "closed" : "open",
+    labels,
+    ...(dropped.length ? {
+      warning: `github accepted the write but did not apply ${dropped.join("; ")}: the bot `
+        + "account likely lacks triage/push access on this repo (GitHub drops these silently)",
+    } : {}),
+  };
 }
 
 export interface GithubForgeOptions {
@@ -266,6 +311,72 @@ export class GithubForge implements Forge {
     const updated = await this.gh<{ number: number; html_url: string }>(
       "PATCH", path, actor.name, patch);
     return { number: updated.number, url: updated.html_url };
+  }
+
+  /** Every label the repo defines, paged 100 at a time. Capped at
+   *  LABEL_PAGES pages so a pathological repo cannot fan one request out
+   *  into unbounded upstream reads; a label beyond the cap reads as unknown,
+   *  which fails closed (nothing is written). */
+  private async repoLabels(r: string, agentId: string): Promise<string[]> {
+    const names: string[] = [];
+    for (let page = 1; page <= LABEL_PAGES; page++) {
+      const batch = await this.gh<{ name: string }[]>(
+        "GET", `${r}/labels?per_page=100&page=${page}`, agentId);
+      names.push(...batch.map((l) => l.name));
+      if (batch.length < 100) break;
+    }
+    return names;
+  }
+
+  /** Map requested labels to the repo's own spelling, or refuse before any
+   *  write. Skipped entirely (no read) for an absent or empty list. */
+  private async resolveLabels(
+    ref: RepoRef, r: string, wanted: string[] | undefined, agentId: string,
+  ): Promise<string[] | undefined> {
+    if (!wanted || wanted.length === 0) return wanted;
+    return matchLabels(ref, wanted, await this.repoLabels(r, agentId));
+  }
+
+  async openIssue(ref: RepoRef, spec: IssueSpec, actor: Author): Promise<IssueResult> {
+    const r = this.repoPath(ref);
+    const labels = await this.resolveLabels(ref, r, spec.labels, actor.name);
+    const post: Record<string, unknown> = { title: spec.title, body: spec.body };
+    if (labels !== undefined) post.labels = labels;
+    if (spec.assignees !== undefined) post.assignees = spec.assignees;
+    if (spec.milestone !== undefined) post.milestone = spec.milestone;
+    const issue = await this.gh<GithubIssue>("POST", `${r}/issues`, actor.name, post);
+    return issueResult(issue, labels, spec.assignees);
+  }
+
+  async updateIssue(
+    ref: RepoRef, number: number, spec: IssueUpdateSpec, attribution: string, actor: Author,
+  ): Promise<IssueResult> {
+    const r = this.repoPath(ref);
+    const path = `${r}/issues/${number}`;
+    // Read first: the author check, the PR check, and the footers all come
+    // from the current issue, and a refused edit must write NOTHING.
+    const issue = await this.gh<GithubIssue & { body: string | null; user: { login: string } }>(
+      "GET", path, actor.name);
+    // GitHub serves PRs on the issues API too; editing one here would
+    // bypass forge_update_pr's PR-specific handling, so send it there.
+    if (issue.pull_request) {
+      throw new ForgeError("invalid",
+        `#${number} on ${ref.owner}/${ref.name} is a pull request; use forge_update_pr`, 422);
+    }
+    const me = await this.credentialLogin(actor.name);
+    if (issue.user.login.toLowerCase() !== me.toLowerCase()) {
+      throw new ForgeError("forbidden",
+        `issue #${number} on ${ref.owner}/${ref.name} was opened by ${issue.user.login}, `
+        + `not by this identity's account (${me}); only its own issues can be edited`, 403);
+    }
+    const labels = await this.resolveLabels(ref, r, spec.labels, actor.name);
+    const patch: Record<string, unknown> = {};
+    if (spec.title !== undefined) patch.title = spec.title;
+    if (spec.body !== undefined) patch.body = withProxyFooters(issue.body ?? "", spec.body, attribution);
+    if (labels !== undefined) patch.labels = labels;
+    if (spec.state !== undefined) patch.state = spec.state;
+    const updated = await this.gh<GithubIssue>("PATCH", path, actor.name, patch);
+    return issueResult(updated, labels, undefined);
   }
 
   async comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult> {
