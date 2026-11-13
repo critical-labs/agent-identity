@@ -5,7 +5,9 @@ import { gitlabServiceAccountUsername } from "./gitlab-names.js";
  *  rules will pattern-match on. */
 export interface ForgeOp {
   service: string;
-  kind: "repo" | "commit" | "blob" | "pr" | "pr_update" | "comment" | "provision" | "fork" | "sync";
+  kind:
+    | "repo" | "commit" | "blob" | "pr" | "pr_update" | "comment"
+    | "issue" | "issue_update" | "provision" | "fork" | "sync";
   owner: string;
   repo: string;
 }
@@ -45,6 +47,15 @@ export function forkNamespacePolicy(config: ForkPolicyConfig = {}): Policy {
     // source it would be a ref write to a repo the agent must never touch,
     // so it is pinned too — and fails closed on GitHub without a configured
     // fork owner, as commits do.
+    //
+    // Deliberately NOT pinned: issue and issue_update (#144), like pr,
+    // pr_update and comment. An issue belongs on the SOURCE repo's tracker —
+    // a follow-up filed on the fork would be invisible to the maintainers —
+    // and it writes no repo content or ref, which is what this pin exists to
+    // keep off the source. Pinning it would make filing an issue impossible
+    // by construction. Containment for issues is the forge credential's own
+    // scope plus the adapters' author gate on updates (an identity can only
+    // edit an issue its own account opened).
     if (op.kind !== "commit" && op.kind !== "blob" && op.kind !== "sync") return { allow: true };
     if (op.service === "gitlab") {
       const expected = gitlabServiceAccountUsername(agent.agentId);

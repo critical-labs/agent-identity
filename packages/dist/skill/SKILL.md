@@ -106,7 +106,9 @@ branch of your fork from its upstream so a PR gets a fresh base; GitHub),
 identity), `forge_open_pr`, `forge_comment` (both append an attribution
 footer), `forge_update_pr` (edit the title or body of a PR your account
 opened; the proxy carries the attribution footers forward and refuses any
-other author's PR), and `forge_provision` (gitlab). **Contribution model: fork, then
+other author's PR), `forge_open_issue` / `forge_update_issue` (file an
+issue on the source repo, or edit one your account opened — see "Filing
+issues" below), and `forge_provision` (gitlab). **Contribution model: fork, then
 PR.** You do not have write access to source repos — call `forge_fork` on
 the source, commit to the returned fork (`forge_commit` with `owner` = the
 fork owner), then `forge_open_pr` on the source with `head` =
@@ -127,6 +129,49 @@ onboarded; a `not_provisioned` error on gitlab means call `forge_provision`
 first. Force-push and branch deletion do not exist in this surface. Note:
 on GitHub all agents share one fork account, so use a distinct branch name;
 on GitLab each identity forks into its own namespace.
+
+### Filing issues
+
+`forge_open_issue` files an issue on the **source** repo (pass the source
+owner/repo, not your fork — like PRs and comments, issues target the
+source; only commits and syncs are pinned to your fork). It takes `title`, `body`, and optional
+`labels`, `assignees`, `milestone`. It returns `number`, `url`, `state`, and
+the `labels` actually applied. `forge_update_issue` edits `title`, `body`,
+`labels` (replaces the set; `[]` clears it) and/or `state` (`open` |
+`closed`) of an issue **your account opened**. Any other author's issue is
+refused, and a PR number is refused (use `forge_update_pr`).
+
+**On GitHub, every agent shares ONE bot account.** "Your account" is that
+shared account, so any agent can edit, relabel, or close an issue that
+*another* agent opened — the proxy cannot tell them apart on GitHub (the
+fleet ledger records which identity did it). Only touch issues you opened
+yourself or were explicitly told to change. On GitLab each identity has its
+own account, so the gate really is per agent.
+
+- **When to use it vs the human `gh` path.** Use it for issues *you*
+  drafted and that should carry agent attribution: review follow-ups,
+  suggestions you were told to track, and bugs you found while working.
+  Leave it to the human (`gh issue create` on their own account) when the
+  human asked to file it themselves, when it needs a label the repo does not
+  have, when it needs editing or closing an issue someone else opened, or
+  when the proxy reports `missing_capability` / `forbidden` for the repo.
+  Never fall back to a human's credentials to file it yourself.
+- **Labels must already exist.** They are matched case-insensitively
+  against the repo's labels. An unknown label refuses the whole call before
+  anything is written, and the proxy never creates labels. Drop the label,
+  or ask the human to add it. If the result carries a `warning`, the forge
+  accepted the write but silently did not apply some labels, assignees, or
+  the milestone — or did not remove labels when you replaced or cleared
+  them — because the account lacks access on that repo (GitHub: triage;
+  GitLab: Planner/Reporter). Tell the human; do not retry.
+- **Do not write a footer.** The proxy appends `_opened by agent <id> via
+  agent-identity proxy_` and strips footer-shaped lines you include.
+- **Cross-reference pattern ("Follow-up from PR #N").** When an issue comes
+  out of a PR, start its body with a line `Follow-up from PR #N` (use
+  `owner/repo#N` when the PR is in another repo). Then `forge_comment` on
+  that PR linking back, e.g. `Filed follow-up #M: <title>`. GitHub
+  turns both references into links, so the PR and the issue each point at
+  the other.
 
 ## GitHub commit attribution & email onboarding (operator, not agents)
 

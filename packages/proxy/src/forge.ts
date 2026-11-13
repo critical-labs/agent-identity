@@ -1,6 +1,7 @@
 import type {
   BlobResult, BlobSpec, CommentResult, CommitChangesSpec, CommitResult, CommitSpec,
-  ForgeProvisionResult, ForkResult, PrResult, PrSpec, PrUpdateSpec,
+  ForgeProvisionResult, ForkResult, IssueResult, IssueSpec, IssueUpdateSpec,
+  PrResult, PrSpec, PrUpdateSpec,
   RepoInfo, RepoRef, RepoVisibility, SyncResult,
 } from "@agent-identity/shared";
 
@@ -73,6 +74,22 @@ export interface Forge {
   updatePullRequest(
     ref: RepoRef, number: number, spec: PrUpdateSpec, attribution: string, actor: Author,
   ): Promise<PrResult>;
+  /** Open an issue on `ref` — the SOURCE repo (#144). `spec.body` already
+   *  carries the proxy's attribution footer. Labels are validated against the
+   *  repo's existing labels BEFORE the write and sent in the repo's own
+   *  spelling; an unknown one is ForgeError("invalid") and nothing is
+   *  written. The proxy never creates a label. Assignees and milestone are
+   *  passed to the forge, which may refuse them. */
+  openIssue(ref: RepoRef, spec: IssueSpec, actor: Author): Promise<IssueResult>;
+  /** Edit title / body / labels / state of issue `number`. Author-only, as
+   *  updatePullRequest: the adapter reads the issue first and refuses, with
+   *  ForgeError("forbidden") and before any write, one that the acting
+   *  credential's own account did not open. A body edit carries the old
+   *  footers forward and appends `attribution` (pr-footers.ts). Labels are
+   *  validated exactly as in openIssue; a list REPLACES the issue's labels. */
+  updateIssue(
+    ref: RepoRef, number: number, spec: IssueUpdateSpec, attribution: string, actor: Author,
+  ): Promise<IssueResult>;
   comment(ref: RepoRef, issue: number, body: string, actor: Author): Promise<CommentResult>;
   fork(ref: RepoRef, actor: Author): Promise<ForkResult>;
   /** Bring one branch of the identity's FORK level with the same branch on

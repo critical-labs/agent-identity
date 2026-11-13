@@ -57,6 +57,12 @@ class RealisticForge implements Forge {
   async updatePullRequest(_ref: RepoRef, number: number) {
     return { number, url: `https://forge/pr/${number}` };
   }
+  async openIssue() {
+    return { number: 21, url: "https://forge/issues/21", state: "open" as const, labels: [] };
+  }
+  async updateIssue(_ref: RepoRef, number: number) {
+    return { number, url: `https://forge/issues/${number}`, state: "open" as const, labels: [] };
+  }
   async comment() {
     return { id: 9, url: "https://forge/c/9" };
   }

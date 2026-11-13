@@ -7,6 +7,7 @@ import { sanitizeMailText } from "./mail.js";
 
 export const ATTESTED_ACTIVITY_TYPES = [
   "forge_commit", "forge_fork", "forge_sync", "forge_pr", "forge_pr_update", "forge_comment",
+  "forge_issue", "forge_issue_update",
   "email_received", "email_rejected", "capability_granted",
 ] as const;
 

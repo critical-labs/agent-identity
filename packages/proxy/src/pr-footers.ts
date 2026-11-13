@@ -1,4 +1,5 @@
-/** Attribution footers the proxy appends to PR/MR bodies and comments:
+/** Attribution footers the proxy appends to PR/MR bodies, issue bodies, and
+ *  comments:
  *  `_opened by agent 482913 via agent-identity proxy_`,
  *  `_description updated by agent 482913 via agent-identity proxy_`.
  *  A footer is a whole line of exactly this shape; the agent id is digits. */

@@ -312,6 +312,38 @@ describe("forge tools", () => {
       .toEqual({ error: "forbidden" });
   });
 
+  it("forge_open_issue delegates with only the optional fields given (#144)", async () => {
+    const forgeOpenIssue = vi.fn(async () => ({ number: 21, url: "u", state: "open", labels: ["bug"] }));
+    const tools = makeTools(managerWith({ forgeOpenIssue }));
+    expect(await tools.forgeOpenIssue({ owner: "o", repo: "r", title: "t", body: "b", labels: ["bug"] }))
+      .toEqual({ number: 21, url: "u", state: "open", labels: ["bug"] });
+    expect(forgeOpenIssue).toHaveBeenCalledWith("github", { owner: "o", name: "r" },
+      { title: "t", body: "b", labels: ["bug"] });
+    await tools.forgeOpenIssue({
+      service: "gitlab", owner: "o", repo: "r", title: "t", body: "b", assignees: ["mc"], milestone: 2,
+    });
+    expect(forgeOpenIssue).toHaveBeenLastCalledWith("gitlab", { owner: "o", name: "r" },
+      { title: "t", body: "b", assignees: ["mc"], milestone: 2 });
+    const failing = makeTools(managerWith({
+      forgeOpenIssue: vi.fn(async () => { throw new Error("unknown label"); }),
+    }));
+    expect(await failing.forgeOpenIssue({ owner: "o", repo: "r", title: "t", body: "b" }))
+      .toEqual({ error: "unknown label" });
+  });
+
+  it("forge_update_issue delegates with the number and only the fields given (#144)", async () => {
+    const forgeUpdateIssue = vi.fn(async () => ({ number: 21, url: "u", state: "closed", labels: [] }));
+    const tools = makeTools(managerWith({ forgeUpdateIssue }));
+    await tools.forgeUpdateIssue({ owner: "o", repo: "r", number: 21, state: "closed", labels: [] });
+    expect(forgeUpdateIssue).toHaveBeenCalledWith("github", { owner: "o", name: "r" }, 21,
+      { labels: [], state: "closed" });
+    const failing = makeTools(managerWith({
+      forgeUpdateIssue: vi.fn(async () => { throw new Error("forbidden"); }),
+    }));
+    expect(await failing.forgeUpdateIssue({ owner: "o", repo: "r", number: 21, title: "t" }))
+      .toEqual({ error: "forbidden" });
+  });
+
   it("forge_open_pr and forge_comment delegate with explicit service", async () => {
     const forgeOpenPr = vi.fn(async () => ({ number: 2, url: "u" }));
     const forgeComment = vi.fn(async () => ({ id: 4, url: "u" }));

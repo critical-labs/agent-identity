@@ -113,6 +113,21 @@ describe("forkNamespacePolicy", () => {
     expect((d as { reason: string }).reason).toMatch(/sync.*githubForkOwner/);
   });
 
+  // #144: an issue lives on the SOURCE repo by nature (a fork's issue tracker
+  // is not where follow-ups belong), like a PR or a comment. The pin covers
+  // repo-content and ref writes only; issue ops stay unpinned on purpose,
+  // even with no fork owner configured, on both forges.
+  it("does not fork-pin issue ops: they target the source repo", () => {
+    for (const p of [forkNamespacePolicy(), forkNamespacePolicy({ githubForkOwner: "critical-agent-zero" })]) {
+      for (const kind of ["issue", "issue_update"] as const) {
+        expect(p(gh, { service: "github", kind, owner: "critical-labs", repo: "agent-identity" }), kind)
+          .toEqual({ allow: true });
+        expect(p(gl, { service: "gitlab", kind, owner: "some-group", repo: "r" }), kind)
+          .toEqual({ allow: true });
+      }
+    }
+  });
+
   it("allows a gitlab sync only in the identity's own namespace", () => {
     const p = forkNamespacePolicy();
     expect(p(gl, { service: "gitlab", kind: "sync", owner: "agent-482913", repo: "r" }))

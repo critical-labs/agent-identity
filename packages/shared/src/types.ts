@@ -118,6 +118,41 @@ export interface PrUpdateSpec {
   body?: string;
 }
 
+/** A new issue on a SOURCE repo (#144). Labels, assignees and milestone
+ *  must already exist on the forge: the proxy validates labels against the
+ *  repo's own list and never creates one. `milestone` is the number the forge
+ *  shows (GitHub milestone number, GitLab project milestone iid). The body is
+ *  sent WITHOUT an attribution footer — the proxy appends it. */
+export interface IssueSpec {
+  title: string;
+  body: string;
+  labels?: string[];
+  assignees?: string[];
+  milestone?: number;
+}
+
+/** An edit to an issue the acting account opened. At least one field is
+ *  required; a field left out is left alone. `labels` REPLACES the issue's
+ *  label set (an empty list clears it). */
+export interface IssueUpdateSpec {
+  title?: string;
+  body?: string;
+  labels?: string[];
+  state?: "open" | "closed";
+}
+
+export interface IssueResult {
+  number: number;
+  url: string;
+  state: "open" | "closed";
+  /** The labels the issue carries after the write, as the forge reports them. */
+  labels: string[];
+  /** Set when the forge accepted the write but silently dropped requested
+   *  labels or assignees (GitHub does this when the account lacks triage
+   *  access on the repo). */
+  warning?: string;
+}
+
 export interface PrResult {
   number: number;
   url: string;

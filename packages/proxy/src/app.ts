@@ -3,7 +3,8 @@ import {
 } from "@agent-identity/api";
 import {
   sanitizeAttestedEvent,
-  type ActivityEvent, type CommitChange, type RepoRef, type RepoVisibility,
+  type ActivityEvent, type CommitChange, type IssueSpec, type IssueUpdateSpec,
+  type RepoRef, type RepoVisibility,
 } from "@agent-identity/shared";
 import type { Context } from "hono";
 import { Hono } from "hono";
@@ -11,6 +12,7 @@ import {
   ForgeError, statusFor, type Author, type Forge, type Provisioner,
 } from "./forge.js";
 import { evaluate, type ForgeOp, type Policy } from "./policy.js";
+import { withProxyFooters } from "./pr-footers.js";
 
 /** Attested-event sink (the shared data layer's ActivityRepo in production).
  *  The proxy is infrastructure: it observed the forge operation succeed, so
@@ -330,6 +332,92 @@ export function createProxyApp(deps: ProxyDeps): Hono {
       },
       ref: r.url,
     }), () => ({ number, fields }));
+  });
+
+  // Issue fields (#144). A label/assignee list is a short list of non-empty
+  // names; the adapter checks labels against the repo's own list, so this is
+  // only the shape. The cap keeps one request from fanning out unbounded
+  // upstream lookups (GitLab resolves each assignee separately).
+  const isNameList = (v: unknown): v is string[] =>
+    Array.isArray(v) && v.length <= 100 && v.every(isStr);
+  const isPositiveInt = (v: unknown): v is number => Number.isInteger(v) && (v as number) > 0;
+
+  // Open an issue on the SOURCE repo (#144). Not fork-namespace-pinned (see
+  // policy.ts): an issue is a tracker entry, not a repo-content write. The
+  // footer is the proxy's, never the agent's: footer-shaped lines in the
+  // agent's body are stripped (withProxyFooters over an empty old body), so
+  // an issue cannot claim it was opened by another identity. owner/repo are
+  // single path segments — they are interpolated into upstream URL paths.
+  app.post("/forge/:service/issue", async (c) => {
+    const g = guard(c);
+    if (g instanceof Response) return g;
+    const b = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    if (!b || !isName(b.owner) || !isName(b.repo) || !isStr(b.title) || typeof b.body !== "string"
+      || (b.labels !== undefined && !isNameList(b.labels))
+      || (b.assignees !== undefined && !isNameList(b.assignees))
+      || (b.milestone !== undefined && !isPositiveInt(b.milestone))) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const op: ForgeOp = { service: g.service, kind: "issue", owner: b.owner, repo: b.repo };
+    const footer = `_opened by agent ${g.agent.agentId} via agent-identity proxy_`;
+    const ref: RepoRef = { owner: b.owner, name: b.repo };
+    const repo = `${b.owner}/${b.repo}`;
+    const spec: IssueSpec = {
+      title: b.title,
+      body: withProxyFooters("", b.body, footer),
+      ...(b.labels !== undefined ? { labels: b.labels as string[] } : {}),
+      ...(b.assignees !== undefined ? { assignees: b.assignees as string[] } : {}),
+      ...(b.milestone !== undefined ? { milestone: b.milestone as number } : {}),
+    };
+    // The attested event names the repo and number only: an issue's title
+    // and body are free text the fleet feeds must never carry.
+    return run(c, g, op, () => g.forge.openIssue(ref, spec, g.actor), async (r) => ({
+      type: "forge_issue",
+      summary: `opened issue #${r.number} on ${repo}`,
+      detail: { service: g.service, repo, number: r.number, ...(await visibilityStamp(g, [ref])) },
+      ref: r.url,
+    }));
+  });
+
+  // Edit an issue the acting account opened (#144): author-gated in the
+  // adapter exactly like pr-update, with the same footer carry-forward.
+  app.post("/forge/:service/issue-update", async (c) => {
+    const g = guard(c);
+    if (g instanceof Response) return g;
+    const b = await c.req.json().catch(() => undefined) as Record<string, unknown> | undefined;
+    const has = (k: string) => b?.[k] !== undefined;
+    if (!b || !isName(b.owner) || !isName(b.repo) || !isPositiveInt(b.number)
+      || !["title", "body", "labels", "state"].some(has)
+      || (has("title") && !isStr(b.title))
+      || (has("body") && typeof b.body !== "string")
+      || (has("labels") && !isNameList(b.labels))
+      || (has("state") && b.state !== "open" && b.state !== "closed")) {
+      return c.json({ error: "invalid_request" }, 400);
+    }
+    const op: ForgeOp = { service: g.service, kind: "issue_update", owner: b.owner, repo: b.repo };
+    const attribution = `_description updated by agent ${g.agent.agentId} via agent-identity proxy_`;
+    const ref: RepoRef = { owner: b.owner, name: b.repo };
+    const repo = `${b.owner}/${b.repo}`;
+    const number = b.number;
+    const spec: IssueUpdateSpec = {
+      ...(has("title") ? { title: b.title as string } : {}),
+      ...(has("body") ? { body: b.body as string } : {}),
+      ...(has("labels") ? { labels: b.labels as string[] } : {}),
+      ...(has("state") ? { state: b.state as "open" | "closed" } : {}),
+    };
+    const fields = ["title", "body", "labels", "state"].filter(has).join(",");
+    return run(c, g, op, () => g.forge.updateIssue(ref, number, spec, attribution, g.actor),
+      async (r) => ({
+        type: "forge_issue_update",
+        // The summary is passed to the public tier verbatim, so it names the
+        // issue only; which fields changed stays in `detail` (keyed ledger).
+        summary: `updated issue #${r.number} on ${repo}`,
+        detail: {
+          service: g.service, repo, number: r.number, fields,
+          ...(await visibilityStamp(g, [ref])),
+        },
+        ref: r.url,
+      }), () => ({ number, fields }));
   });
 
   app.post("/forge/:service/comment", async (c) => {

@@ -24,6 +24,14 @@ Ed25519 identity, and it holds the forge credentials server-side and executes
   account opened (any other author is refused before a write). The proxy
   keeps the footers the body already carried and appends one naming the
   editing identity, so a rewritten description never loses its provenance.
+- **`forge_open_issue` / `forge_update_issue`** — file an issue on the
+  *source* repo (title, body, labels, optional assignees/milestone), and edit
+  the title/body/labels/state of an issue the acting account opened. The body
+  gets the same attribution footer as a PR; footer-shaped lines the agent
+  wrote are stripped, so an issue cannot claim another opener. Labels must
+  already exist in the repo — an unknown label is refused before anything is
+  written, and the proxy never creates one. Editing another account's issue is
+  refused, as with `forge_update_pr`.
 - **`forge_provision`** — provision this identity on a forge that supports it
   (GitLab).
 
@@ -47,10 +55,28 @@ forge_fork(source)  →  [forge_sync(fork)]  →  forge_commit(fork, …)  →  
 
 (`forge_sync` is the optional step: call it when the fork may be behind.)
 
-"No write to source" is enforced two ways: the credential is scoped to the
-bot's fork namespace (it *cannot* write upstream), and a deterministic proxy
-policy refuses any commit whose target isn't the identity's fork namespace (it
-*won't*). That policy is the first rule on the guard-rail seam that a fuller
+Issues are the deliberate exception to "never the source": a follow-up
+belongs on the source repo's tracker, and an issue writes no repo content or
+ref. So `forge_open_issue` / `forge_update_issue` (like `forge_open_pr` and
+`forge_comment`) target the source and are not fork-namespace-pinned; edits
+are author-gated instead. For this to work live, the GitHub credential needs
+**Issues: write** on the source repos (a fine-grained PAT scoped only to the
+fork namespace cannot file upstream issues — cross-owner needs a classic PAT
+with `public_repo`, or `repo` for private repos), and applying labels,
+assignees, or a milestone needs triage access there: without it GitHub
+*accepts* the issue but silently drops them, which the proxy reports as a
+`warning` in the result.
+
+"No write to source" (for repo content) is enforced by a deterministic proxy
+policy that refuses any commit, blob, or sync whose target isn't the
+identity's fork namespace (it *won't*). Ideally the credential is also
+scoped so it *cannot* write upstream content — but once the GitHub
+credential is granted Issues: write on source repos (above), and especially
+with a classic `public_repo`/`repo` PAT, that credential layer no longer
+covers source repos, and the proxy policy is the only thing keeping commits
+off them. Prefer the narrowest grant that still allows issues (a
+fine-grained token, or an App with Issues: write but not Contents: write on
+the source repos) so both layers keep holding. That policy is the first rule on the guard-rail seam that a fuller
 policy engine (scope allow-lists, rate limits, destructive-action gates) will
 grow into.
 

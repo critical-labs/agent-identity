@@ -213,6 +213,24 @@ describe("forge methods", () => {
     expect(JSON.parse(init.body as string)).toEqual({ owner: "o", repo: "r", number: 7, body: "d" });
   });
 
+  it("forgeOpenIssue and forgeUpdateIssue post to the issue routes (#144)", async () => {
+    const fetchMock = makeFetch({ number: 21, url: "u", state: "open", labels: [] });
+    const client = new AgentIdentityClient({
+      apiUrl: "https://api.example", keypair: kp, fetch: fetchMock as never,
+    });
+    await client.forgeOpenIssue("github", { owner: "o", name: "r" },
+      { title: "t", body: "b", labels: ["bug"] });
+    await client.forgeUpdateIssue("gitlab", { owner: "o", name: "r" }, 21, { state: "closed" });
+    const [url1, init1] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url1).toBe("https://api.example/forge/github/issue");
+    expect(JSON.parse(init1.body as string)).toEqual({
+      owner: "o", repo: "r", title: "t", body: "b", labels: ["bug"],
+    });
+    const [url2, init2] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(url2).toBe("https://api.example/forge/gitlab/issue-update");
+    expect(JSON.parse(init2.body as string)).toEqual({ owner: "o", repo: "r", number: 21, state: "closed" });
+  });
+
   it("forgeOpenPr and forgeComment post their bodies", async () => {
     const fetchMock = makeFetch({ number: 1, url: "u" });
     const client = new AgentIdentityClient({
