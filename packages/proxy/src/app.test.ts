@@ -904,6 +904,32 @@ describe("attested activity ledger", () => {
     expect(JSON.stringify(pub)).not.toMatch(/title|state|fields/);
   });
 
+  it("writes a forge_pr_update event whose summary never names the changed fields", async () => {
+    const { deps, ledger } = ledgered();
+    const app = createProxyApp(deps);
+
+    const uPath = "/forge/github/pr-update";
+    const uBody = JSON.stringify({ owner: "o", repo: "r", number: 7, title: "new secret", body: "secret body" });
+    const res = await app.request(uPath, { ...signed("POST", uPath, uBody), body: uBody });
+    expect(res.status).toBe(200);
+    // The API result is unchanged by the summary change.
+    expect(await res.json()).toEqual({ number: 7, url: "https://forge/pr/7" });
+
+    expect(ledger.events.map((e) => e.type)).toEqual(["forge_pr_update"]);
+    expect(ledger.events[0].detail).toEqual(expect.objectContaining({
+      repo: "o/r", number: 7, fields: "title,body",
+    }));
+    expect(JSON.stringify(ledger.events)).not.toMatch(/secret/);
+    // Which fields changed is keyed-ledger detail only: the summary — which
+    // the public tier passes through verbatim — names the PR, not the edit.
+    expect(ledger.events[0].summary).toBe("updated PR #7 on o/r");
+    const pub = publicView(
+      ledger.events.map((e) => ({ ...e, detail: { ...e.detail, repo: "critical-labs/x", visibility: "public" } })),
+      [], parseRepoAllowlist("critical-labs/*")).events;
+    expect(pub).toHaveLength(1);
+    expect(JSON.stringify(pub)).not.toMatch(/title|body|fields/);
+  });
+
   it("stamps detail.visibility 'public' on forge events when the forge reports the repo public", async () => {
     const { deps, ledger, forge } = ledgered();
     const app = createProxyApp(deps);
