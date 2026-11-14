@@ -134,10 +134,11 @@ on GitLab each identity forks into its own namespace.
 
 `forge_open_issue` files an issue on the **source** repo (pass the source
 owner/repo, not your fork — like PRs and comments, issues target the
-source; only commits and syncs are pinned to your fork). It takes `title`, `body`, and optional
-`labels`, `assignees`, `milestone`. It returns `number`, `url`, `state`, and
-the `labels` actually applied. `forge_update_issue` edits `title`, `body`,
-`labels` (replaces the set; `[]` clears it) and/or `state` (`open` |
+source; only commits, blobs, and syncs are pinned to your fork). It takes
+`title`, `body`, and optional `labels`, `assignees`, `milestone`. It
+returns `number`, `url`, `state`, and the `labels` actually applied.
+`forge_update_issue` edits `title`, `body`, `labels` (replaces the set;
+`[]` clears it) and/or `state` (`open` |
 `closed`) of an issue **your account opened**. Any other author's issue is
 refused, and a PR number is refused (use `forge_update_pr`).
 

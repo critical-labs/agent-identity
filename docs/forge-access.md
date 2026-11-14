@@ -76,9 +76,9 @@ with a classic `public_repo`/`repo` PAT, that credential layer no longer
 covers source repos, and the proxy policy is the only thing keeping commits
 off them. Prefer the narrowest grant that still allows issues (a
 fine-grained token, or an App with Issues: write but not Contents: write on
-the source repos) so both layers keep holding. That policy is the first rule on the guard-rail seam that a fuller
-policy engine (scope allow-lists, rate limits, destructive-action gates) will
-grow into.
+the source repos) so both layers keep holding. The fork-namespace proxy
+policy is the first rule on the guard-rail seam that a fuller policy engine
+(scope allow-lists, rate limits, destructive-action gates) will grow into.
 
 A fork goes stale, and GitHub never syncs one on its own — so a PR opened
 from an old fork gets an old base. The agent cannot fix that itself: it holds
