@@ -325,7 +325,9 @@ export function createProxyApp(deps: ProxyDeps): Hono {
       { owner: b.owner as string, name: b.repo as string }, number, spec, attribution, g.actor,
     ), async (r) => ({
       type: "forge_pr_update",
-      summary: `updated PR #${r.number} on ${repo} (${fields})`,
+      // The summary is passed to the public tier verbatim, so it names the
+      // PR only; which fields changed stays in `detail` (keyed ledger).
+      summary: `updated PR #${r.number} on ${repo}`,
       detail: {
         service: g.service, repo, number: r.number, fields,
         ...(await visibilityStamp(g, [{ owner: b.owner as string, name: b.repo as string }])),
